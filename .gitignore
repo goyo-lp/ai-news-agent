@@ -1,0 +1,28 @@
+# Python virtual env and caches
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# OS/editor junk
+.DS_Store
+.vscode/
+.idea/
+
+# Local logs/artifacts
+*.log
+telegram-resized-image.png
