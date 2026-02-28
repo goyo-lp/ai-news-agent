@@ -2,19 +2,19 @@
 
 ## Goal
 
-Build a Python + LangGraph AI news agent that:
-- Reads RSS sources from `news-sources.yaml`
-- Deduplicates both exact URLs and cross-source “same story” coverage
-- Ranks and selects top 50 stories per run
+Build and maintain a Python + LangGraph AI news agent that:
+- Reads RSS sources from `data/news-sources.yaml`
+- Deduplicates exact URLs and cross-source same-story coverage
+- Ranks and selects top 50 stories per run (or fewer)
 - Sends exactly 1 Telegram message per selected story
-- Message format (Telegram-friendly HTML):
+- Uses Telegram-friendly formatting:
   1. Clickable title linking to source URL
   2. Photo
   3. Exactly 3-sentence summary
 - Uses OpenRouter model `openai/gpt-oss-20b`
-- Uses LangSmith as the only observability system
-- Uses LangGraphics for live local graph visualization during each run
-- Runs by manual CLI command only (no scheduler)
+- Uses LangSmith as the only observability tool
+- Uses LangGraphics for live local graph visualization during runs
+- Runs via manual CLI command only
 
 ## Non-Negotiable Constraints
 
@@ -22,102 +22,55 @@ Build a Python + LangGraph AI news agent that:
 - Framework: LangGraph
 - LLM provider: OpenRouter
 - Observability: LangSmith only
-- Visualization: LangGraphics (auto-start on CLI run)
+- Visualization: LangGraphics
 - Secrets: `.env` only
 - Delivery: Telegram Bot API
 - Run mode: manual CLI trigger only
-- Output volume: max 20 articles per run
+- Output volume: max 50 articles per run
 
-## Target Architecture
+## Current Architecture
 
-1. Orchestrator Node
-- Drives the LangGraph flow and shared state.
+1. Ingestion Node
+- Parses RSS feeds and normalizes records.
+- Removes tracking query params and deduplicates exact URL matches.
 
-2. Ingestion Node
-- Parses RSS feeds and normalizes article records.
+2. Enrichment Node
+- Resolves canonical URL and extracts `og:title`, `og:description`, `og:image`.
+- Applies source-specific image fallback rules.
 
-3. Enrichment Node
-- Resolves canonical URL, extracts OG metadata, applies image fallbacks.
+3. Ranking Node
+- Clusters same-story coverage across sources.
+- Uses relevance-first scoring to prioritize:
+  - new tech/features/releases
+  - startups/funding
+  - technical breakthroughs
+  - enterprise adoption/deployments
+  - AI deals/partnerships/acquisitions
+- Demotes lower-priority event/roundup style items unless they also contain high-signal relevance.
+- Selects cluster representatives and keeps top 50.
 
-4. Ranking Node
-- Clusters same-story articles across different sources, selects cluster representatives, scores and keeps top 50.
+4. Summarization Node
+- Generates exactly 3-sentence summaries via OpenRouter.
 
-5. Summarization Node
-- Produces exactly 3-sentence summaries via OpenRouter.
-
-6. Delivery Node
-- Sends one Telegram message per article with retry/backoff.
-
-## Codex Operating Instructions
-
-Codex should execute in small, verifiable phases and commit after each phase.
-
-For each phase:
-1. Implement only the scope listed.
-2. Run the listed validation commands.
-3. Fix failures before moving on.
-4. Update docs/examples when interfaces change.
-
-If blocked by missing credentials, Codex should:
-1. Add clear placeholders to `.env.example`.
-2. Continue with mocked/local tests.
-3. Mark external integration tests as pending.
-
-## Repository Structure To Create
-
-```text
-ai-news-agent/
-  src/
-    app/
-      graph/
-        state.py
-        workflow.py
-      nodes/
-        ingest.py
-        enrich.py
-        rank.py
-        summarize.py
-        deliver.py
-      services/
-        rss_client.py
-        extractor.py
-        openrouter_client.py
-        telegram_client.py
-        scoring.py
-      schemas/
-        article.py
-      config.py
-      logging.py
-      main.py
-  tests/
-    test_ingest.py
-    test_enrich.py
-    test_rank.py
-    test_summarize.py
-    test_telegram_format.py
-  data/
-    news-sources.yaml
-  .venv/
-  .env.example
-  requirements.txt
-  pyproject.toml
-  README.md
-```
+5. Delivery Node
+- Sends one Telegram message per article in HTML mode.
 
 ## Shared Data Contract
 
-Article fields (required unless noted):
-- `id` (stable hash)
+Article fields:
+- `id`
 - `source_name`
 - `source_rss`
 - `title`
 - `url`
 - `published_at`
+- `description` (optional)
 - `og_title` (optional)
 - `og_description` (optional)
 - `image_url` (optional)
 - `summary` (optional)
 - `score` (optional)
+- `duplicate_count`
 - `cluster_id` (optional)
 - `cluster_size` (optional)
 
@@ -127,7 +80,7 @@ Run state fields:
 - `articles_raw`
 - `articles_enriched`
 - `articles_ranked`
-- `articles_top20`
+- `articles_top20` (legacy key name; currently stores selected output list)
 - `delivery_results`
 - `errors`
 
@@ -137,171 +90,116 @@ Use Telegram `HTML` parse mode.
 
 Per article send in one message:
 1. `<a href="ARTICLE_URL">TITLE</a>`
-2. Photo
-: Preferred: send as photo caption message.
-: Fallback: send photo then text message only if Telegram API constraints require split.
-3. 3-sentence summary text.
+2. Photo (if available)
+3. Exactly 3-sentence summary
 
 Formatting rules:
 - Escape HTML entities in title and summary.
-- Do not exceed Telegram limits.
-- If no valid image exists, send text-only message with title + summary.
+- Respect Telegram caption/message length limits.
+- If no valid image exists, send text-only message.
 
-## Phase-by-Phase Build Plan For Codex
+## Codex Execution Sequence (Detailed)
 
-### Phase 1: Bootstrap project
-
+### Phase 1: Bootstrap and Environment
 Deliverables:
-- `.venv` virtual environment
+- `.venv`
 - `requirements.txt`
 - `pyproject.toml`
 - base package layout
 - `.env.example`
-- `README.md` quickstart
-
-Dependencies:
-- `langgraph`, `langchain`, `httpx`, `feedparser`, `beautifulsoup4`, `lxml`, `pydantic`, `pydantic-settings`, `python-dotenv`, `langsmith`, `pytest`, `pytest-asyncio`, `mypy`, `ruff`
 
 Validation:
 - `uv venv .venv`
 - `uv run ruff check .`
 - `uv run mypy src`
 
-### Phase 2: Config + schemas + state
-
+### Phase 2: Config, Schemas, and State
 Deliverables:
-- `config.py` with env loading
-- `schemas/article.py`
-- `graph/state.py`
+- env-driven config loading
+- article/schema models
+- graph state model
 
 Validation:
-- Unit tests for config parsing and schema validation.
+- unit tests for config/schema parsing
 
-### Phase 3: Ingestion
-
+### Phase 3: RSS Ingestion
 Deliverables:
-- `rss_client.py`
-- `nodes/ingest.py`
-
-Behavior:
-- Load sources from `data/news-sources.yaml`
-- Parse RSS entries
-- Normalize and dedupe (canonical URL + hash)
+- RSS fetch client
+- ingest node
 
 Validation:
-- `tests/test_ingest.py` with fixture feeds
-- Assert dedupe correctness
+- ingest tests with duplicate URL scenarios
 
-### Phase 4: Enrichment
-
+### Phase 4: OpenGraph Enrichment
 Deliverables:
-- `extractor.py`
-- `nodes/enrich.py`
-
-Behavior:
-- Resolve final URLs
-- Extract `og:title`, `og:description`, `og:image`
-- Apply fallback rules from source config
+- extractor service
+- enrich node
 
 Validation:
-- `tests/test_enrich.py`
-- Cases: valid OG image, missing OG image, blocked domain
+- tests for OG extraction, fallback image behavior, blocked domains
 
-### Phase 5: Ranking
-
+### Phase 5: Relevance-First Ranking
 Deliverables:
-- `scoring.py`
-- `nodes/rank.py`
-
-Behavior:
-- Build same-story clusters across sources using title/content similarity and time window checks
-- Select one representative article per cluster
-- Apply deterministic score from recency, source weight, URL-duplication signal, cluster-support signal, novelty
-- Keep top 50 representative stories
+- scoring service
+- rank node
 
 Validation:
-- `tests/test_rank.py`
-- Assert sort order and exactly 20 max
-- Assert same-story articles from different sources collapse into one representative
+- tests that high-signal relevance outranks generic event/roundup content
+- tests that same-story clustering returns one representative
+- limit behavior remains correct (<= 50)
 
 ### Phase 6: Summarization
-
 Deliverables:
-- `openrouter_client.py`
-- `nodes/summarize.py`
-
-Behavior:
-- Prompt model `openai/gpt-oss-20b`
-- Enforce exactly 3 sentences per article
-- Retry once on malformed output
+- OpenRouter client
+- summarize node
 
 Validation:
-- `tests/test_summarize.py` using mocked OpenRouter responses
+- tests enforce exactly 3-sentence output contract
 
-### Phase 7: Telegram delivery
-
+### Phase 7: Telegram Delivery
 Deliverables:
-- `telegram_client.py`
-- `nodes/deliver.py`
-- message formatter utility
-
-Behavior:
-- One message per article
-- Clickable title + image + 3-sentence summary
-- Retry/backoff on Telegram errors
+- Telegram client
+- delivery node
+- formatting utility
 
 Validation:
-- `tests/test_telegram_format.py`
-- Mock Telegram API responses
+- tests for HTML-safe formatting and one-message-per-article behavior
 
-### Phase 8: LangGraph wiring + CLI
-
+### Phase 8: Graph Wiring + CLI
 Deliverables:
-- `graph/workflow.py`
-- `main.py` with manual run command
-
-CLI contract:
-- `uv run python -m app.main run`
-- optional flags: `--dry-run`, `--limit 50`, `--verbose`
+- workflow wiring in LangGraph
+- CLI `run` command with `--dry-run`, `--limit`, `--verbose`
 
 Validation:
-- End-to-end dry run with sample data
+- end-to-end dry-run execution
 
-### Phase 9: LangSmith instrumentation
-
+### Phase 9: Observability + Visualization
 Deliverables:
-- LangSmith tracing around each node and LLM call
+- LangSmith traces for node and LLM spans
+- LangGraphics live visualization on local host/port
 
 Validation:
-- Confirm one trace per run with node-level spans
+- verify trace visibility and graph rendering during run
 
-### Phase 10: Final hardening
-
+### Phase 10: Hardening and Docs
 Deliverables:
-- Error taxonomy and graceful failure handling
-- Idempotency guard to avoid duplicate sends in same run
-- README operational runbook
+- runbook-level README
+- CLI command docs
+- troubleshooting notes
 
 Validation:
-- Full test suite + lint + type checks
-- Manual integration run with real Telegram chat
+- lint + type checks + tests all pass
+- manual integration run against real Telegram bot
 
 ## Definition of Done
 
 Project is done when all are true:
-1. Manual CLI run completes without crashing.
+1. Manual CLI run completes reliably.
 2. Pipeline selects top 50 or fewer articles.
-3. Each selected article produces one Telegram message.
-4. Each message has clickable title, image when available, and exactly 3-sentence summary.
+3. Each selected article sends one Telegram message.
+4. Each message includes clickable title, image when available, and exactly 3-sentence summary.
 5. OpenRouter calls use `openai/gpt-oss-20b`.
-6. LangSmith traces show complete run and node timings.
-7. Lint, types, and tests pass.
-8. Cross-source same-story duplicates are clustered and only one representative is sent.
-
-## Acceptance Test Checklist
-
-1. Run with `--dry-run` and inspect generated payloads.
-2. Run against real Telegram bot and verify formatting on mobile.
-3. Force missing image and verify fallback behavior.
-4. Force malformed model output and verify re-generation.
-5. Re-run same inputs and confirm duplicate suppression behavior.
+6. LangSmith traces include full run + node spans.
+7. Tests, lint, and type checks pass.
+8. Exact duplicates and same-story cross-source duplicates are both handled.
+9. Relevance-first ranking prioritizes product/market-moving AI news over lower-signal event roundup content.

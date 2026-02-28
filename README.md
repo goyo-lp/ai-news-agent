@@ -1,6 +1,6 @@
 # AI News Agent
 
-LangGraph-based AI news pipeline that pulls RSS sources, enriches articles with OpenGraph metadata, deduplicates and clusters similar stories, summarizes with OpenRouter (`openai/gpt-oss-20b`), and sends a Telegram digest.
+LangGraph-based AI news pipeline that pulls RSS sources, enriches articles with OpenGraph metadata, deduplicates and clusters similar stories, summarizes with OpenRouter (`openai/gpt-oss-20b`), and sends Telegram digest messages.
 
 ## What This App Does
 
@@ -10,22 +10,46 @@ LangGraph-based AI news pipeline that pulls RSS sources, enriches articles with 
 - Applies image fallback rules from source config
 - Deduplicates exact URL duplicates
 - Clusters cross-source same-story coverage and keeps one representative
-- Ranks and selects top 50 stories per run
+- Ranks and selects up to 50 stories per run (or fewer if less are available)
 - Generates exactly 3-sentence summaries
 - Sends one Telegram message per selected story
+
+## Ranking Logic (Relevance-First)
+
+Ranking now prioritizes relevance to high-signal AI business and product developments.
+
+Primary relevance signals:
+- New tech/model/features/product launches
+- New startups and funding activity
+- Technical developments and breakthroughs
+- Enterprise adoption/deployments
+- AI deals, partnerships, and acquisitions
+
+Lower-priority signals (demoted unless also high-signal):
+- Event roundups
+- Webinar/podcast recap content
+- Generic newsletter-style coverage
+
+Final ranking score combines:
+- Relevance score (highest weight)
+- Recency
+- Source quality weight
+- Duplicate/coverage signal
+- Cluster support signal
+- Title novelty
 
 ## Delivery Format (Per Article)
 
 Each Telegram message is:
 1. Clickable title linked to the source article
-2. Photo (`og:image` or fallback)
+2. Photo (`og:image` or configured fallback)
 3. 3-sentence summary
 
 ## Tech Stack
 
 - Language: Python 3.11+
 - Agent framework: LangGraph
-- LLM: OpenRouter, model `openai/gpt-oss-20b`
+- LLM: OpenRouter (`openai/gpt-oss-20b`)
 - Observability: LangSmith
 - Live graph visualization: LangGraphics
 
@@ -74,7 +98,7 @@ Recommended:
 - `LANGSMITH_PROJECT`
 - `LANGSMITH_TRACING=true`
 
-Other runtime controls are already listed in `.env.example`.
+Other runtime controls are listed in `.env.example`.
 
 ## Get Telegram Chat ID
 
@@ -110,11 +134,11 @@ source .venv/bin/activate && PYTHONPATH=src python -m app.main run
 
 LangGraphics is automatically wired into the run path.
 
-When you run the app, it opens on:
+When you run the app:
 - HTTP UI: `http://localhost:8764`
 - WS stream: `ws://localhost:8765`
 
-The repo includes official built LangGraphics web assets and syncs them into the installed `langgraphics/static` path before `watch(...)` starts.
+The repo includes built LangGraphics web assets and syncs them into the installed `langgraphics/static` path before `watch(...)` starts.
 
 Config flags:
 - `LANGGRAPHICS_ENABLED=true|false`

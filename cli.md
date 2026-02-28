@@ -1,9 +1,25 @@
-# CLI Command
+# CLI Commands
 
-Run from the project root:
+Run from project root.
 
+Main run (sends to Telegram):
 ```bash
 source .venv/bin/activate && PYTHONPATH=src python -m app.main run
 ```
 
-This command now also starts LangGraphics visualization automatically.
+Dry run (no Telegram send):
+```bash
+source .venv/bin/activate && PYTHONPATH=src python -m app.main run --dry-run
+```
+
+Limit output (max 50):
+```bash
+source .venv/bin/activate && PYTHONPATH=src python -m app.main run --limit 50
+```
+
+Verbose logs:
+```bash
+source .venv/bin/activate && PYTHONPATH=src python -m app.main run --verbose
+```
+
+LangGraphics starts automatically during runs.

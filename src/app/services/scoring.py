@@ -54,6 +54,170 @@ _STOPWORDS = {
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
+_PRODUCT_LAUNCH_KEYWORDS = {
+    "launch",
+    "launches",
+    "launched",
+    "release",
+    "releases",
+    "released",
+    "rollout",
+    "rollouts",
+    "ship",
+    "ships",
+    "shipped",
+    "debut",
+    "debuts",
+    "debuted",
+    "introduces",
+    "introduced",
+    "unveils",
+    "unveiled",
+    "feature",
+    "features",
+    "api",
+    "apis",
+    "model",
+    "models",
+    "agent",
+    "agents",
+    "platform",
+    "copilot",
+    "copilots",
+    "sdk",
+    "tool",
+    "tools",
+}
+
+_TECH_DEVELOPMENT_KEYWORDS = {
+    "breakthrough",
+    "breakthroughs",
+    "benchmark",
+    "benchmarks",
+    "inference",
+    "training",
+    "multimodal",
+    "reasoning",
+    "architecture",
+    "architectures",
+    "chip",
+    "chips",
+    "accelerator",
+    "accelerators",
+    "evaluation",
+    "efficiency",
+    "latency",
+    "throughput",
+    "sota",
+}
+
+_STARTUP_FUNDING_KEYWORDS = {
+    "startup",
+    "startups",
+    "funding",
+    "fundraise",
+    "fundraising",
+    "seed",
+    "preseed",
+    "series",
+    "valuation",
+    "investor",
+    "investors",
+    "venture",
+    "vc",
+    "raise",
+    "raises",
+    "raised",
+}
+
+_ENTERPRISE_ADOPTION_KEYWORDS = {
+    "enterprise",
+    "enterprises",
+    "adoption",
+    "adopt",
+    "adopts",
+    "adopted",
+    "deploy",
+    "deploys",
+    "deployed",
+    "deployment",
+    "production",
+    "customer",
+    "customers",
+    "workflow",
+    "workflows",
+    "integration",
+    "integrates",
+    "integrated",
+    "operations",
+    "productivity",
+}
+
+_DEAL_KEYWORDS = {
+    "deal",
+    "deals",
+    "partnership",
+    "partnerships",
+    "partner",
+    "partners",
+    "contract",
+    "contracts",
+    "acquire",
+    "acquires",
+    "acquired",
+    "acquisition",
+    "merger",
+    "mergers",
+    "agreement",
+    "agreements",
+}
+
+_LOW_PRIORITY_KEYWORDS = {
+    "event",
+    "events",
+    "conference",
+    "conferences",
+    "summit",
+    "webinar",
+    "meetup",
+    "podcast",
+    "newsletter",
+    "interview",
+    "opinion",
+    "roundup",
+    "recap",
+    "guide",
+    "tutorial",
+    "course",
+}
+
+_HIGH_RELEVANCE_PHRASES = {
+    "new model",
+    "new feature",
+    "model release",
+    "product launch",
+    "series a",
+    "series b",
+    "series c",
+    "funding round",
+    "enterprise adoption",
+    "enterprise deployment",
+    "production deployment",
+    "strategic partnership",
+    "signed a deal",
+}
+
+_LOW_PRIORITY_PHRASES = {
+    "weekly roundup",
+    "daily roundup",
+    "event recap",
+    "conference recap",
+    "podcast episode",
+    "panel discussion",
+    "how to",
+    "step by step",
+}
+
 
 @dataclass
 class StoryCluster:
@@ -71,6 +235,54 @@ def _tokenize(value: str) -> set[str]:
 
 def _source_weight(source_name: str) -> float:
     return _SOURCE_WEIGHTS.get(source_name.lower().strip(), 0.7)
+
+
+def _boost_from_hits(hits: int, base: float, extra: float, max_extra_hits: int = 2) -> float:
+    if hits <= 0:
+        return 0.0
+    return base + (min(hits - 1, max_extra_hits) * extra)
+
+
+def _count_phrase_hits(text: str, phrases: set[str]) -> int:
+    return sum(1 for phrase in phrases if phrase in text)
+
+
+def _relevance_score(article: Article) -> float:
+    content = f"{article.effective_title} {article.effective_summary_source}".strip().lower()
+    normalized_content = _normalize_text(content)
+    if not normalized_content:
+        return 0.2
+
+    tokens = _tokenize(normalized_content)
+    score = 0.15
+
+    product_hits = len(tokens & _PRODUCT_LAUNCH_KEYWORDS)
+    tech_hits = len(tokens & _TECH_DEVELOPMENT_KEYWORDS)
+    startup_hits = len(tokens & _STARTUP_FUNDING_KEYWORDS)
+    enterprise_hits = len(tokens & _ENTERPRISE_ADOPTION_KEYWORDS)
+    deal_hits = len(tokens & _DEAL_KEYWORDS)
+    total_priority_hits = (
+        product_hits + tech_hits + startup_hits + enterprise_hits + deal_hits
+    )
+
+    score += _boost_from_hits(product_hits, base=0.28, extra=0.03)
+    score += _boost_from_hits(tech_hits, base=0.22, extra=0.03)
+    score += _boost_from_hits(startup_hits, base=0.24, extra=0.03)
+    score += _boost_from_hits(enterprise_hits, base=0.22, extra=0.03)
+    score += _boost_from_hits(deal_hits, base=0.20, extra=0.03)
+
+    high_phrase_hits = _count_phrase_hits(normalized_content, _HIGH_RELEVANCE_PHRASES)
+    low_phrase_hits = _count_phrase_hits(normalized_content, _LOW_PRIORITY_PHRASES)
+    low_keyword_hits = len(tokens & _LOW_PRIORITY_KEYWORDS)
+
+    score += min(high_phrase_hits, 2) * 0.07
+
+    if low_phrase_hits or low_keyword_hits:
+        penalty = 0.08 if total_priority_hits > 0 else 0.22
+        penalty += min(low_phrase_hits + low_keyword_hits, 3) * 0.03
+        score -= penalty
+
+    return max(0.0, min(score, 1.0))
 
 
 def _recency_score(published_at: datetime | None) -> float:
@@ -170,6 +382,7 @@ def cluster_articles(articles: list[Article]) -> list[StoryCluster]:
 
 
 def score_article(article: Article, cluster_size: int = 1) -> float:
+    relevance = _relevance_score(article)
     recency = _recency_score(article.published_at)
     source_weight = _source_weight(article.source_name)
     duplication_signal = min(article.duplicate_count / 5.0, 1.0)
@@ -177,10 +390,11 @@ def score_article(article: Article, cluster_size: int = 1) -> float:
     novelty = _novelty_score(article)
 
     score = (
-        0.40 * recency
-        + 0.27 * source_weight
-        + 0.14 * duplication_signal
-        + 0.14 * cluster_signal
+        0.38 * relevance
+        + 0.24 * recency
+        + 0.14 * source_weight
+        + 0.10 * duplication_signal
+        + 0.09 * cluster_signal
         + 0.05 * novelty
     )
     return round(score, 5)

@@ -2,63 +2,59 @@
 
 ## Core Framework
 
-- LangGraph
-- LangChain (supporting utilities)
-- LangGraphics (live local visualization for LangGraph runs)
+- LangGraph (agent workflow orchestration)
+- LangGraphics (live local visualization of graph execution)
 
 ## Language and Runtime
 
-- Chosen language: Python
 - Python 3.11+
-- uv (package/env management)
-- TypeScript is not the primary implementation language for this build
+- uv for environment/package management
 
 ## LLM and AI APIs
 
 - OpenRouter API
 - Model: `openai/gpt-oss-20b`
 
-## Data Ingestion and Parsing
+## Data Ingestion and Enrichment
 
-- feedparser (RSS parsing)
-- httpx (HTTP client, async)
-- trafilatura or readability-lxml (article text extraction fallback)
-- beautifulsoup4 + lxml (HTML/OpenGraph parsing)
+- `feedparser` for RSS parsing
+- `httpx` for async HTTP requests
+- `beautifulsoup4` + `lxml` for OpenGraph extraction
 
-## Scheduling and Workflow Execution
+## Ranking and Selection
 
-- Manual CLI-triggered runs only (no scheduler)
+- In-code deterministic scoring service (`src/app/services/scoring.py`)
+- Relevance-first ranking with same-story clustering and dedup signals
 
-## Storage
+## Delivery
 
-- PostgreSQL (primary store: articles, runs, delivery logs)
-- Redis (cache, dedupe keys, short-lived state)
-
-## Telegram Delivery
-
-- Telegram Bot API
-- python-telegram-bot or direct HTTP via httpx
-- Telegram HTML parse mode for message formatting
+- Telegram Bot API via async `httpx`
+- Telegram HTML parse mode
 
 ## Observability
 
 - LangSmith only
 
-## Quality and Testing
+## Execution Model
 
-- pytest
-- pytest-asyncio
-- ruff (lint)
-- mypy (type checks)
-
-## Deployment
-
-- Local/manual execution via CLI command
-- No Docker
+- Manual CLI-triggered runs only
 - No scheduler
-- No deployment orchestration layer
+- No Docker requirement
+
+## Storage and State
+
+- Source config in YAML (`data/news-sources.yaml`)
+- In-memory run state (LangGraph state object)
+- No external database required in current version
 
 ## Configuration and Secrets
 
-- pydantic-settings
-- `.env` only
+- `pydantic-settings`
+- `.env` file only
+
+## Quality and Testing
+
+- `pytest`
+- `pytest-asyncio`
+- `ruff`
+- `mypy`
