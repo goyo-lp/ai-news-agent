@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
+from app.nodes.rank import filter_articles_published_today
 from app.schemas.article import Article
 from app.services.scoring import rank_articles
 
@@ -21,6 +22,17 @@ def _article(
         published_at=datetime.now(timezone.utc) - timedelta(hours=hours_old),
         description=description,
         duplicate_count=duplicate_count,
+    )
+
+
+def _dated_article(article_id: str, published_at: datetime | None) -> Article:
+    return Article(
+        id=article_id,
+        source_name="Test Source",
+        source_rss="https://example.com/feed",
+        title=f"Title {article_id}",
+        url=f"https://example.com/{article_id}",
+        published_at=published_at,
     )
 
 
@@ -105,3 +117,30 @@ def test_rank_articles_uses_description_for_relevance_signals() -> None:
 
     ranked = rank_articles([generic_event, startup_deal], limit=20)
     assert ranked[0].id == "deal"
+
+
+def test_filter_articles_published_today_keeps_same_day() -> None:
+    now = datetime(2026, 3, 2, 12, 0, tzinfo=timezone.utc)
+    today = _dated_article("today", datetime(2026, 3, 2, 1, 0, tzinfo=timezone.utc))
+    old = _dated_article("old", datetime(2026, 3, 1, 23, 59, tzinfo=timezone.utc))
+
+    filtered = filter_articles_published_today([today, old], now=now)
+    assert [item.id for item in filtered] == ["today"]
+
+
+def test_filter_articles_published_today_respects_reference_timezone() -> None:
+    eastern = timezone(timedelta(hours=-5))
+    now = datetime(2026, 3, 2, 0, 30, tzinfo=eastern)
+    old_local_day = _dated_article("old-local", datetime(2026, 3, 2, 3, 30, tzinfo=timezone.utc))
+    today_local = _dated_article("today-local", datetime(2026, 3, 2, 6, 0, tzinfo=timezone.utc))
+
+    filtered = filter_articles_published_today([old_local_day, today_local], now=now)
+    assert [item.id for item in filtered] == ["today-local"]
+
+
+def test_filter_articles_published_today_excludes_missing_dates() -> None:
+    now = datetime(2026, 3, 2, 12, 0, tzinfo=timezone.utc)
+    undated = _dated_article("undated", None)
+
+    filtered = filter_articles_published_today([undated], now=now)
+    assert filtered == []

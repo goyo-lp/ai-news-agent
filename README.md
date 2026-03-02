@@ -9,6 +9,7 @@ LangGraph-based AI news pipeline that pulls RSS sources, enriches articles with 
 - Enriches each article with OpenGraph fields (`og:title`, `og:description`, `og:image`)
 - Applies image fallback rules from source config
 - Deduplicates exact URL duplicates
+- Filters to articles published today (local timezone) before ranking
 - Clusters cross-source same-story coverage and keeps one representative
 - Ranks and selects up to 50 stories per run (or fewer if less are available)
 - Generates exactly 3-sentence summaries
