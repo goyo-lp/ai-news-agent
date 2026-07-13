@@ -83,18 +83,14 @@ tests/
 
 ## Setup
 
-1. Create and activate virtual environment:
+Requires [uv](https://docs.astral.sh/uv/).
+
+1. Install dependencies (creates `.venv` and installs from `uv.lock`):
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+uv sync
 ```
 
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-3. Create `.env` from `.env.example` and fill values.
+2. Create `.env` from `.env.example` and fill values.
 
 ## Required `.env` Values
 
@@ -123,22 +119,17 @@ curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getUpdates"
 
 Dry run (no Telegram sends):
 ```bash
-PYTHONPATH=src python -m app.main run --dry-run
+uv run ai-news-agent run --dry-run
 ```
 
 Real run:
 ```bash
-PYTHONPATH=src python -m app.main run
+uv run ai-news-agent run
 ```
 
 Useful flags:
 - `--limit 50`
 - `--verbose`
-
-Equivalent one-liner:
-```bash
-source .venv/bin/activate && PYTHONPATH=src python -m app.main run
-```
 
 ## Live Visualization
 
@@ -176,11 +167,17 @@ Config flags:
 
 Run tests:
 ```bash
-PYTHONPATH=src pytest -q
+uv run pytest -q
 ```
 
 Type/lint checks:
 ```bash
-PYTHONPATH=src mypy src
-ruff check .
+uv run mypy src
+uv run ruff check .
+```
+
+Add a dependency:
+```bash
+uv add <package>          # runtime dependency
+uv add --dev <package>    # dev-only dependency
 ```
