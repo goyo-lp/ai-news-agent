@@ -7,6 +7,7 @@ name = "ai-news-agent"
 version = "0.1.0"
 description = "LangGraph-based AI news digest agent for Telegram"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
   "langgraph",

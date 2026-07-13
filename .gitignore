@@ -12,6 +12,12 @@ __pycache__/
 .coverage
 coverage.xml
 htmlcov/
+node_modules/
+
+# Local AI-agent tooling (personal, machine-specific)
+.claude/
+.opencode/
+graphify-out/
 
 # Environment files
 .env
@@ -26,3 +32,4 @@ htmlcov/
 # Local logs/artifacts
 *.log
 telegram-resized-image.png
+data/delivery-history.json

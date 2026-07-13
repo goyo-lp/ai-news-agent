@@ -10,10 +10,13 @@ LangGraph-based AI news pipeline that pulls RSS sources, enriches articles with 
 - Applies image fallback rules from source config
 - Deduplicates exact URL duplicates
 - Filters to articles published today (local timezone) before ranking
+- Skips stories already delivered in a previous run (tracked in `data/delivery-history.json`)
 - Clusters cross-source same-story coverage and keeps one representative
-- Ranks and selects up to 50 stories per run (or fewer if less are available)
+- Ranks candidates deterministically, then optionally re-ranks the top pool with one batched OpenRouter call
+- Selects up to 50 stories per run (or fewer if less are available)
 - Generates exactly 3-sentence summaries
 - Sends one Telegram message per selected story
+- Records successfully delivered stories to history so they aren't repeated in later runs
 
 ## Ranking Logic (Relevance-First)
 
@@ -37,7 +40,12 @@ Final ranking score combines:
 - Source quality weight
 - Duplicate/coverage signal
 - Cluster support signal
-- Title novelty
+- Novelty (dissimilarity to titles delivered in the last `HISTORY_RETENTION_DAYS` days)
+
+The top-ranked pool (up to 40 candidates) is optionally re-scored by a single batched OpenRouter
+call and blended 70/30 with the deterministic score. This step is skipped automatically on
+`--dry-run`, when `OPENROUTER_API_KEY` is unset, or if the call fails — the deterministic ranking
+always stands on its own.
 
 ## Delivery Format (Per Article)
 
@@ -67,6 +75,7 @@ src/app/
 
 data/
   news-sources.yaml
+  delivery-history.json   # generated at runtime, gitignored
 
 tests/
   unit tests
@@ -158,6 +167,10 @@ Config flags:
 `Source fetch failed ... 403/429`
 - Some feeds block bots or rate-limit aggressively.
 - This is non-fatal; the run continues with remaining sources.
+
+`Ranking complete: selected 0 items` / run ends right after ranking
+- Either nothing was published today, or every fresh story was already delivered in a prior run.
+- Delete or edit `data/delivery-history.json` to reset the dedup window if needed.
 
 ## Development
 
