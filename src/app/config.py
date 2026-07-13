@@ -8,7 +8,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     openrouter_api_key: str | None = None
-    openrouter_model: str = "openai/gpt-oss-20b"
+    openrouter_model: str = "deepseek/deepseek-v4-flash"
+    openrouter_reasoning_effort: str | None = "high"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_site_url: str | None = None
     openrouter_app_name: str = "AI News Agent"

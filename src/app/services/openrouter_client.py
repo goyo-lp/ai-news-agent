@@ -10,11 +10,26 @@ import httpx
 
 from app.config import Settings
 from app.schemas.article import Article
+from app.services.middleware import (
+    MiddlewareChain,
+    Middleware,
+    lookup_reasoning_effort,
+    reasoning_effort_middleware,
+    strip_reasoning_middleware,
+)
 
 logger = logging.getLogger(__name__)
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 _JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
+
+# Patterns that indicate the model leaked chain-of-thought reasoning into the
+# output. Matched against the start of the response (case-insensitive).
+_REASONING_START = re.compile(
+    r"^\s*(the user(user wants|is asking|asked)?|user wants|i need|i'll|i will|i should|"
+    r"let me|let's|here (is|are)|to summarize|first|sure|okay|i can|i could|i think)\b",
+    re.IGNORECASE,
+)
 
 
 def parse_relevance_scores(text: str, valid_keys: set[str]) -> dict[str, float]:
@@ -48,6 +63,11 @@ def split_sentences(text: str) -> list[str]:
     return [part.strip() for part in _SENTENCE_SPLIT.split(cleaned) if part.strip()]
 
 
+def looks_like_reasoning(text: str) -> bool:
+    """True when the response starts with chain-of-thought / meta-commentary."""
+    return bool(_REASONING_START.match(text.strip()))
+
+
 def enforce_sentence_count(text: str, count: int = 3) -> str:
     sentences = split_sentences(text)
     if len(sentences) >= count:
@@ -66,13 +86,21 @@ def enforce_sentence_count(text: str, count: int = 3) -> str:
 
 
 class OpenRouterClient:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, middlewares: list[Middleware] | None = None) -> None:
         self.settings = settings
+        if middlewares is None:
+            effort = lookup_reasoning_effort(settings.openrouter_reasoning_effort)
+            middlewares = [
+                reasoning_effort_middleware(effort=effort),
+                strip_reasoning_middleware,
+            ]
+        self._chain = MiddlewareChain(middlewares)
 
     async def summarize_articles(self, articles: list[Article], dry_run: bool) -> list[Article]:
         semaphore = asyncio.Semaphore(min(self.settings.http_concurrency, 4))
 
         async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds) as client:
+
             async def worker(article: Article) -> Article:
                 async with semaphore:
                     summary = await self.summarize_article(client, article, dry_run=dry_run)
@@ -101,7 +129,10 @@ class OpenRouterClient:
                     "role": "system",
                     "content": (
                         "You summarize AI news for a Telegram digest. "
-                        "Return exactly 3 concise sentences."
+                        "Return exactly 3 concise factual sentences about what the article reports "
+                        "and why it matters. Do not name or allude to the publisher, source, or "
+                        "author. Output ONLY the 3 sentences — no reasoning, no preamble, no "
+                        "labels, no meta-commentary about the task."
                     ),
                 },
                 {"role": "user", "content": prompt},
@@ -112,19 +143,34 @@ class OpenRouterClient:
 
         try:
             first_pass = await self._request_summary(client, headers, payload)
-            if len(split_sentences(first_pass)) >= 3:
+            first_pass = first_pass.strip()
+            if len(split_sentences(first_pass)) >= 3 and not looks_like_reasoning(first_pass):
                 return enforce_sentence_count(first_pass, count=3)
 
-            # Retry once with an explicit output reminder if the first response is malformed.
+            # Retry once with a stronger output reminder if the first response was
+            # malformed or leaked chain-of-thought reasoning into the output.
             retry_payload = dict(payload)
             retry_payload["messages"] = [
                 *payload["messages"],
                 {
+                    "role": "assistant",
+                    "content": first_pass,
+                },
+                {
                     "role": "user",
-                    "content": "Rewrite your answer as exactly 3 sentences.",
+                    "content": (
+                        "Your previous response leaked reasoning or was malformed. "
+                        "Start fresh and write ONLY 3 factual sentences about the article's "
+                        "content. Do not mention the publisher. Do not explain what you are "
+                        "doing. Output only the 3 sentences."
+                    ),
                 },
             ]
             second_pass = await self._request_summary(client, headers, retry_payload)
+            second_pass = second_pass.strip()
+            if looks_like_reasoning(second_pass):
+                logger.warning("OpenRouter kept leaking reasoning for %s; falling back", article.id)
+                return self._fallback_summary(article)
             return enforce_sentence_count(second_pass, count=3)
         except Exception as exc:
             logger.warning("OpenRouter call failed for %s: %s", article.id, exc)
@@ -197,13 +243,18 @@ class OpenRouterClient:
         headers: dict[str, str],
         payload: dict[str, object],
     ) -> str:
-        response = await client.post(
-            f"{self.settings.openrouter_base_url}/chat/completions",
-            headers=headers,
-            json=payload,
-        )
-        response.raise_for_status()
-        return str(response.json()["choices"][0]["message"]["content"])
+        base_url = self.settings.openrouter_base_url
+
+        async def base_call(p: dict) -> str:
+            response = await client.post(
+                f"{base_url}/chat/completions",
+                headers=headers,
+                json=p,
+            )
+            response.raise_for_status()
+            return str(response.json()["choices"][0]["message"]["content"])
+
+        return await self._chain.execute(base_call, dict(payload))
 
     def _build_prompt(self, article: Article) -> str:
         published = (
@@ -214,16 +265,17 @@ class OpenRouterClient:
         context = article.effective_summary_source
         return (
             f"Title: {article.effective_title}\n"
-            f"Source: {article.source_name}\n"
             f"Published: {published}\n"
             f"URL: {article.url}\n"
             f"Context: {context}\n"
-            "Write exactly 3 sentences focused on key facts and why this matters."
+            "Summarize what this article reports and why it matters, in exactly 3 sentences. "
+            "Focus on the article's content only — do not mention the publisher or who wrote it. "
+            "Output only the 3 sentences."
         )
 
     def _fallback_summary(self, article: Article) -> str:
         context = article.effective_summary_source.strip()
-        title_sentence = f"{article.effective_title} is a notable AI update from {article.source_name}."
+        title_sentence = f"{article.effective_title} is a notable AI update."
         context_sentence = (
             f"Key context: {context[:180].rstrip('.')}."
             if context
