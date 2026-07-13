@@ -21,5 +21,3 @@ Verbose logs:
 ```bash
 uv run ai-news-agent run --verbose
 ```
-
-LangGraphics starts automatically during runs.

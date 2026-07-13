@@ -13,7 +13,6 @@ dependencies = [
   "langgraph",
   "langchain",
   "langsmith",
-  "langgraphics @ git+https://github.com/proactive-agent/langgraphics.git@main",
   "httpx",
   "feedparser",
   "beautifulsoup4",

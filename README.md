@@ -62,7 +62,6 @@ Each Telegram message is:
 - Agent framework: LangGraph
 - LLM: OpenRouter (`openai/gpt-oss-20b`)
 - Observability: LangSmith
-- Live graph visualization: LangGraphics
 
 ## Project Structure
 
@@ -70,7 +69,7 @@ Each Telegram message is:
 src/app/
   graph/        # LangGraph workflow/state
   nodes/        # ingest/enrich/rank/summarize/deliver nodes
-  services/     # RSS, extraction, ranking, OpenRouter, Telegram, langgraphics assets
+  services/     # RSS, extraction, ranking, OpenRouter, Telegram
   schemas/      # Pydantic models
   config.py     # environment settings
   main.py       # CLI entrypoint
@@ -132,21 +131,6 @@ uv run ai-news-agent run
 Useful flags:
 - `--limit 50`
 - `--verbose`
-
-## Live Visualization
-
-LangGraphics is automatically wired into the run path.
-
-When you run the app:
-- HTTP UI: `http://localhost:8764`
-- WS stream: `ws://localhost:8765`
-
-The repo includes built LangGraphics web assets and syncs them into the installed `langgraphics/static` path before `watch(...)` starts.
-
-Config flags:
-- `LANGGRAPHICS_ENABLED=true|false`
-- `LANGGRAPHICS_OPEN_BROWSER=true|false`
-- `LANGGRAPHICS_HOST`, `LANGGRAPHICS_PORT`, `LANGGRAPHICS_WS_PORT`
 
 ## Troubleshooting
 

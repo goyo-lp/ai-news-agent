@@ -54,11 +54,12 @@ The highest-weighted component. Uses keyword and phrase matching against the art
 | Startup/funding | 0.24 | +0.03 | startup, funding, seed, series, valuation, investor, venture, raise |
 | Enterprise adoption | 0.22 | +0.03 | enterprise, adoption, deploy, deployment, production, customer, workflow, integration |
 | Deals | 0.20 | +0.03 | deal, partnership, partner, contract, acquire, acquisition, merger, agreement |
+| Frontier company | 0.24 | +0.04 | openai, chatgpt, gpt, anthropic, claude, gemini, deepmind, xai, grok, cursor, copilot, llama, mistral, deepseek, qwen, nvidia, huggingface, perplexity, windsurf, midjourney |
 
 Extra hits are capped at 2 additional beyond the first.
 
 **High-relevance phrases** (up to 2 matched, +0.07 each):
-`new model`, `new feature`, `model release`, `product launch`, `series a/b/c`, `funding round`, `enterprise adoption`, `enterprise deployment`, `production deployment`, `strategic partnership`, `signed a deal`
+`new model`, `new feature`, `model release`, `product launch`, `series a/b/c`, `funding round`, `enterprise adoption`, `enterprise deployment`, `production deployment`, `strategic partnership`, `signed a deal`, `open source model`, `open weights`
 
 **Low-priority penalty**: Keywords like `event`, `conference`, `webinar`, `podcast`, `newsletter`, `roundup`, `recap`, `tutorial`, `how to` reduce the score. Penalty is 0.08 if priority hits exist, 0.22 if none. Additional 0.03 per low-priority signal (max 3).
 
@@ -79,13 +80,16 @@ Hardcoded reputation weights in `_SOURCE_WEIGHTS`:
 | Source | Weight |
 |--------|--------|
 | OpenAI Blog, Google DeepMind Blog, Anthropic Blog, Meta AI Blog | 1.0 |
-| MIT Technology Review | 0.92 |
+| Google AI Blog | 0.95 |
+| MIT Technology Review, Simon Willison | 0.90–0.92 |
 | TechCrunch (AI) | 0.90 |
-| The Verge (AI) | 0.88 |
-| Wired (AI) | 0.88 |
+| The Verge (AI), Wired (AI), Ars Technica (AI) | 0.88 |
 | VentureBeat (AI) | 0.87 |
-| The Guardian (AI) | 0.85 |
-| ZDNet (AI) | 0.80 |
+| Hacker News (Top), The Guardian (AI) | 0.85 |
+| GitHub Trending, ZDNet (AI) | 0.80 |
+| Reddit r/MachineLearning | 0.62 |
+| Reddit r/artificial | 0.60 |
+| arXiv.org (cs.AI) | 0.50 |
 | Any other source | 0.70 (default) |
 
 ### Duplication Signal (0.0–1.0, weight 0.10)
@@ -105,7 +109,8 @@ Hardcoded reputation weights in `_SOURCE_WEIGHTS`:
 1. All articles are scored within their clusters (novelty penalizes recently-delivered titles)
 2. Each cluster's highest-scoring member (ties broken by newest `published_at`) becomes the representative
 3. Representatives are sorted by score descending (ties broken by newest)
-4. Top `limit` articles are returned (default 50, clamped to `[1, MAX_ARTICLES_PER_RUN]`)
+4. If `max_per_source` is set, each source is capped at that count — no backfill past the cap, so a quiet day yields a shorter digest (prevents high-volume feeds like arXiv from flooding the digest)
+5. Top `limit` articles are returned (default 50, clamped to `[1, MAX_ARTICLES_PER_RUN]`, per-source cap `MAX_ARTICLES_PER_SOURCE` default 3)
 
 **Note**: In the rank node, `rank_articles()` is called with `limit=max(limit, _LLM_RERANK_POOL)` (40) to produce a wider candidate pool. The LLM re-rank then blends scores (30% LLM, 70% deterministic) and the final cut to `limit` happens after that blend. See [Pipeline Workflow](../workflows/pipeline.md#node-3-rank) for details.
 
@@ -124,4 +129,5 @@ If dry-run, no API key, or the call fails, the deterministic scores stand unchan
 - **52cb4ae** (initial): Basic scoring without relevance keywords
 - **56ccbc2**: Major refactor — added keyword-based relevance scoring with 5 priority categories, phrase matching, low-priority penalties, source weights, and clustering
 - **f5384e1**: Added `filter_articles_published_today()` before ranking to exclude non-today articles
+- **784cf0d**: Added frontier company keyword category, per-source cap (`max_per_source`), demoted arXiv/Reddit source weights, added new high-relevance phrases (`open source model`, `open weights`)
 - **uncommitted**: Novelty score changed from title-length heuristic to title-similarity against delivery history. `rank_articles()` and `score_article()` now accept `recent_titles` parameter. LLM re-rank blends 30% LLM relevance scores into final ranking.

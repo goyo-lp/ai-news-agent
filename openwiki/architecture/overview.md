@@ -16,8 +16,7 @@ The graph is built by `build_workflow()` which:
 1. Creates a `StateGraph` with `AgentState` as the state type
 2. Registers each node function
 3. Wires a linear chain up to `rank`, then a **conditional edge** after `rank`
-4. Compiles the graph
-5. Optionally wraps it with LangGraphics `watch()` for live visualization
+4. Compiles the graph and returns it
 
 ```python
 graph.set_entry_point("ingest")
@@ -29,8 +28,6 @@ graph.add_edge("deliver", END)
 ```
 
 `route_after_rank(state)` returns `"summarize"` when `articles_selected` is non-empty, otherwise skips directly to `END`. This prevents unnecessary LLM and Telegram calls when the date/history filters remove all articles.
-
-When `LANGGRAPHICS_ENABLED=true` (default), the compiled graph is wrapped with `langgraphics.watch()` which starts an HTTP UI at `localhost:8764` and a WebSocket stream at `localhost:8765`. Before starting, `ensure_langgraphics_static_assets()` copies vendored web assets from `src/app/assets/langgraphics_static/` into the installed `langgraphics/static/` path.
 
 ## Agent State
 
@@ -65,8 +62,7 @@ Settings are loaded via `pydantic-settings` `BaseSettings` from `.env`. The `get
 | OpenRouter | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OPENROUTER_BASE_URL`, `OPENROUTER_SITE_URL`, `OPENROUTER_APP_NAME` | model=`openai/gpt-oss-20b` |
 | Telegram | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_PARSE_MODE` | parse_mode=`HTML` |
 | LangSmith | `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`, `LANGSMITH_TRACING` | project=`ai-news-agent`, tracing=true |
-| LangGraphics | `LANGGRAPHICS_ENABLED`, `LANGGRAPHICS_OPEN_BROWSER`, `LANGGRAPHICS_HOST/PORT/WS_PORT/DIRECTION/MODE/INSPECT/THEME` | port=8764, ws_port=8765 |
-| Runtime | `SOURCES_FILE`, `HISTORY_FILE`, `HISTORY_RETENTION_DAYS`, `REQUEST_TIMEOUT_SECONDS`, `HTTP_CONCURRENCY`, `MAX_FEED_ITEMS_PER_SOURCE`, `MAX_ARTICLES_PER_RUN`, `USER_AGENT` | concurrency=8, max_articles=50, history_file=`data/delivery-history.json`, retention=14d |
+| Runtime | `SOURCES_FILE`, `HISTORY_FILE`, `HISTORY_RETENTION_DAYS`, `REQUEST_TIMEOUT_SECONDS`, `HTTP_CONCURRENCY`, `MAX_FEED_ITEMS_PER_SOURCE`, `MAX_ARTICLES_PER_RUN`, `MAX_ARTICLES_PER_SOURCE`, `USER_AGENT` | concurrency=8, max_articles=50, max_per_source=3, history_file=`data/delivery-history.json`, retention=14d |
 
 ### Required Fields Validation
 
@@ -89,7 +85,7 @@ All node functions are decorated with `@traceable(name="<node_name>")` from Lang
 The CLI uses `argparse` with a single `run` subcommand:
 
 ```bash
-python -m app.main run [--dry-run] [--limit N] [--verbose]
+uv run ai-news-agent run [--dry-run] [--limit N] [--verbose]
 ```
 
 The `run_pipeline()` function:

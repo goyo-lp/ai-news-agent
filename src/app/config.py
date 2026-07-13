@@ -20,15 +20,6 @@ class Settings(BaseSettings):
     langsmith_api_key: str | None = None
     langsmith_project: str = "ai-news-agent"
     langsmith_tracing: bool = True
-    langgraphics_enabled: bool = True
-    langgraphics_open_browser: bool = True
-    langgraphics_host: str = "localhost"
-    langgraphics_port: int = 8764
-    langgraphics_ws_port: int = 8765
-    langgraphics_direction: str = "TB"
-    langgraphics_mode: str = "auto"
-    langgraphics_inspect: str = "off"
-    langgraphics_theme: str = "system"
 
     sources_file: str = "data/news-sources.yaml"
     history_file: str = "data/delivery-history.json"

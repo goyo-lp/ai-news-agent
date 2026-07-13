@@ -193,7 +193,7 @@
       <div class="card"><div class="k">Sources</div><div class="v"><b>26 RSS feeds</b> in <code>data/news-sources.yaml</code><br><span class="muted">TLDR AI, TechCrunch, The Verge, GitHub Trending, Simon Willison, arXiv cs.AI, HN top, lab blogs… capped at 3 stories/source</span></div></div>
       <div class="card"><div class="k">AI use</div><div class="v"><b>Summarization + batched re-rank</b><br><span class="muted">keyword base score; one optional LLM call blends into ranking (skipped on dry-run/no key)</span></div></div>
       <div class="card"><div class="k">Delivery</div><div class="v"><b>Telegram</b> — 1 message/story<br><span class="muted"><code>sendPhoto</code> with caption, fallback to <code>sendMessage</code></span></div></div>
-      <div class="card"><div class="k">Observability</div><div class="v"><b>LangSmith</b> traces + <b>LangGraphics</b> live UI<br><span class="muted"><code>localhost:8764</code> web, <code>8765</code> WS</span></div></div>
+      <div class="card"><div class="k">Observability</div><div class="v"><b>LangSmith</b> traces<br><span class="muted">optional; falls back to no-op if not configured</span></div></div>
     </div>
   </div>
 </section>
@@ -350,7 +350,7 @@
     <h3>⑦ Report — <code>main.py:55-85</code></h3>
     <div class="card"><div class="v">Counts selected / attempted / sent / failed → prints summary → returns exit code.</div></div>
 
-    <div class="note ok"><b>Side channels:</b> LangGraphics wraps the compiled graph with <code>langgraphics.watch()</code> (workflow.py:38) when <code>LANGGRAPHICS_ENABLED=true</code> → live UI at <code>localhost:8764</code> + WS <code>8765</code>. LangSmith traces emit from each node's <code>@traceable</code> decorator to project <code>ai-news-agent</code>.</div>
+    <div class="note ok"><b>Side channels:</b> LangSmith traces emit from each node's <code>@traceable</code> decorator to project <code>ai-news-agent</code>.</div>
   </div>
 </section>
 
@@ -368,7 +368,6 @@
         <tr><td>LLM orchestration</td><td>LangChain</td><td class="mono">pyproject.toml:13</td></tr>
         <tr><td>LLM provider</td><td>OpenRouter — model <code>openai/gpt-oss-20b</code></td><td class="mono">config.py:11, .env.example:2</td></tr>
         <tr><td>Observability</td><td>LangSmith</td><td class="mono">pyproject.toml:14, services/tracing.py:7</td></tr>
-        <tr><td>Live visualization</td><td>LangGraphics (git+proactive-agent/langgraphics@main)</td><td class="mono">pyproject.toml:15, graph/workflow.py:35</td></tr>
         <tr><td>HTTP client</td><td>httpx</td><td class="mono">rss / extractor / openrouter / telegram</td></tr>
         <tr><td>RSS parsing</td><td>feedparser</td><td class="mono">services/rss_client.py:11</td></tr>
         <tr><td>HTML parsing</td><td>beautifulsoup4 + lxml</td><td class="mono">services/extractor.py:9</td></tr>
@@ -401,9 +400,9 @@
     </div>
 
     <div class="layer">
-      <div class="lh"><span class="lvl">L1</span><span class="ttl">graph — workflow wiring</span><span class="desc">StateGraph assembly + LangGraphics wrap</span></div>
+      <div class="lh"><span class="lvl">L1</span><span class="ttl">graph — workflow wiring</span><span class="desc">StateGraph assembly</span></div>
       <div class="files">
-        <span class="file"><b>graph/workflow.py</b><span class="role">build_workflow() — 5 nodes, conditional edge after rank, compile, watch()</span></span>
+        <span class="file"><b>graph/workflow.py</b><span class="role">build_workflow() — 5 nodes, conditional edge after rank, compile</span></span>
         <span class="file"><b>graph/state.py</b><span class="role">AgentState TypedDict — 11 fields</span></span>
       </div>
     </div>
@@ -429,7 +428,6 @@
         <span class="file"><b>services/history.py</b><span class="role">load_history · filter_previously_delivered · record_deliveries</span></span>
         <span class="file"><b>services/telegram_client.py</b><span class="role">TelegramClient · build_telegram_caption · retry</span></span>
         <span class="file"><b>services/tracing.py</b><span class="role">@traceable — LangSmith or no-op fallback</span></span>
-        <span class="file"><b>services/langgraphics_assets.py</b><span class="role">ensure_langgraphics_static_assets()</span></span>
       </div>
     </div>
 
@@ -458,7 +456,7 @@
 <section id="integrations">
   <div class="wrap">
     <h2><span class="num">06</span>External Integrations</h2>
-    <p class="sub">No database, no email, no Slack, no vector store, no MCP servers. Just four external touchpoints.</p>
+    <p class="sub">No database, no email, no Slack, no vector store, no MCP servers, no live visualization UI. Just four external touchpoints.</p>
     <div class="grid cards" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
 
       <div class="int" style="--c:var(--ingest)">
@@ -483,12 +481,6 @@
         <div class="h"><div class="ic">🔍</div><div><div class="nm">LangSmith</div><div class="type">observability · tracing</div></div></div>
         <div class="body"><code>@traceable</code> decorator on all 5 nodes emits traces to project <code>ai-news-agent</code>. Optional — falls back to no-op if not installed.</div>
         <span class="ref">services/tracing.py:7 · config.py:64 configure_langsmith_env()</span>
-      </div>
-
-      <div class="int" style="--c:var(--acc2)">
-        <div class="h"><div class="ic">📊</div><div><div class="nm">LangGraphics</div><div class="type">live visualization · local HTTP/WS</div></div></div>
-        <div class="body"><code>langgraphics.watch(compiled)</code> starts UI at <code>localhost:8764</code> + WS <code>8765</code>, visualizes graph execution live during the run.</div>
-        <span class="ref">graph/workflow.py:35-48 · services/langgraphics_assets.py</span>
       </div>
 
       <div class="int" style="--c:var(--amber)">
@@ -629,9 +621,6 @@ Write exactly 3 sentences focused on key facts and why this matters.
         <tr><td class="mono">LANGSMITH_API_KEY</td><td>—</td><td><span class="opt">recommended</span></td><td>Observability</td></tr>
         <tr><td class="mono">LANGSMITH_PROJECT</td><td>ai-news-agent</td><td><span class="opt">no</span></td><td>Trace project</td></tr>
         <tr><td class="mono">LANGSMITH_TRACING</td><td>true</td><td><span class="opt">no</span></td><td>Enable tracing</td></tr>
-        <tr><td class="mono">LANGGRAPHICS_ENABLED</td><td>true</td><td><span class="opt">no</span></td><td>Live graph UI</td></tr>
-        <tr><td class="mono">LANGGRAPHICS_OPEN_BROWSER</td><td>true</td><td><span class="opt">no</span></td><td>Auto-open browser</td></tr>
-        <tr><td class="mono">LANGGRAPHICS_HOST/PORT/WS_PORT</td><td class="mono">localhost/8764/8765</td><td><span class="opt">no</span></td><td>UI bind</td></tr>
         <tr><td class="mono">SOURCES_FILE</td><td class="mono">data/news-sources.yaml</td><td><span class="opt">no</span></td><td>RSS source config path</td></tr>
         <tr><td class="mono">HISTORY_FILE</td><td class="mono">data/delivery-history.json</td><td><span class="opt">no</span></td><td>Delivery history store (cross-run dedup + novelty)</td></tr>
         <tr><td class="mono">HISTORY_RETENTION_DAYS</td><td>14</td><td><span class="opt">no</span></td><td>How long delivered stories stay in history</td></tr>

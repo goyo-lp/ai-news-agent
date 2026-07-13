@@ -20,6 +20,9 @@ The pipeline executes as a linear LangGraph chain up to the rank node, then bran
 - `build_article_id(source, url, title)` — SHA-256 hash, truncated to 24 chars
 - `dedupe_articles(articles)` — URL-keyed dedup, keeps newest by `published_at`
 
+### Sources Without Publish Dates
+Some feeds (e.g. GitHub Trending) don't include publish dates. When `assume_published_now: true` is set in the source config, the RSS client stamps the fetch time as `published_at` so the today-filter doesn't drop every item.
+
 ### Error Handling
 Source fetch failures (403, 429, timeouts) are non-fatal. Errors are captured as strings and appended to `state["errors"]`. The pipeline continues with remaining sources.
 
@@ -51,7 +54,8 @@ Source fetch failures (403, 429, timeouts) are non-fatal. Errors are captured as
 2. **History filter**: Loads delivery history from `data/delivery-history.json` (retention: `HISTORY_RETENTION_DAYS`, default 14) and drops articles whose URL was previously delivered. New file: `src/app/services/history.py`.
 3. **Deterministic ranking**: Clusters same-story articles and scores them with `rank_articles()`, passing `recent_titles` from delivery history so the novelty component penalizes recently-delivered stories. Retrieves up to `_LLM_RERANK_POOL` (40) candidates — wider than the run `limit` to give the LLM re-rank a larger pool.
 4. **LLM re-rank**: Calls `OpenRouterClient.score_articles_relevance()` — a single batched OpenRouter request that returns 0–100 relevance scores for all candidates. Scores are blended at `_LLM_BLEND_WEIGHT = 0.3` (30% LLM, 70% deterministic). If dry-run or no API key, this step is skipped and deterministic scores stand.
-5. **Selection**: Cuts to the run `limit` after final sort.
+5. **Per-source cap**: Each source is capped at `MAX_ARTICLES_PER_SOURCE` (default 3) — no backfill past the cap, so a quiet day yields a shorter digest. Prevents high-volume feeds like arXiv from flooding the digest.
+6. **Selection**: Cuts to the run `limit` after final sort.
 
 ### State Output
 Sets `articles_selected` to the serialized list of selected articles.

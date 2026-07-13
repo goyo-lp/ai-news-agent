@@ -3,7 +3,7 @@
 ## Running Tests
 
 ```bash
-PYTHONPATH=src pytest -q
+uv run pytest -q
 ```
 
 All tests are synchronous (pytest-asyncio is configured with `asyncio_mode = "auto"` in `pyproject.toml` but current tests don't use async fixtures).
@@ -11,17 +11,17 @@ All tests are synchronous (pytest-asyncio is configured with `asyncio_mode = "au
 ## Type and Lint Checks
 
 ```bash
-PYTHONPATH=src mypy src
-ruff check .
+uv run mypy src
+uv run ruff check .
 ```
 
 Configuration: `ruff` with `line-length=100`, `target-version=py311`. `mypy` with `python_version=3.11`, `disallow_untyped_defs=true`, `warn_return_any=true`.
 
 ## Test Files
 
-### `tests/test_rank.py` (7 tests)
+### `tests/test_rank.py` (11 tests)
 
-The most comprehensive test file. Tests ranking, clustering, date filtering, relevance prioritization, and history-aware novelty.
+The most comprehensive test file. Tests ranking, clustering, date filtering, relevance prioritization, history-aware novelty, and per-source capping.
 
 | Test | What It Validates |
 |------|------------------|
@@ -30,6 +30,8 @@ The most comprehensive test file. Tests ranking, clustering, date filtering, rel
 | `test_rank_articles_clusters_same_story_across_sources` | Two articles with similar titles from different sources cluster into 1 representative |
 | `test_rank_articles_prioritizes_high_relevance_over_event_roundups` | "Startup raises Series B" outranks "Top AI events and webinar roundup" even when roundup is from OpenAI Blog |
 | `test_rank_articles_uses_description_for_relevance_signals` | Relevance scoring uses description text, not just title — startup/deal keywords in description boost score |
+| `test_rank_articles_caps_items_per_source` | With `max_per_source=3`, arXiv flood is capped to 3 items while other sources pass through |
+| `test_rank_articles_boosts_frontier_company_mentions` | Article mentioning Anthropic/Claude outranks a generic version of the same headline |
 | `test_rank_articles_penalizes_recently_delivered_titles` | When `recent_titles` is provided, articles matching delivered titles get lower novelty scores than baseline |
 | `test_filter_articles_published_today_keeps_same_day` | Date filter keeps only articles published on the reference date |
 | `test_filter_articles_published_today_respects_reference_timezone` | Date filter converts published_at to local timezone before comparing dates |
@@ -98,6 +100,5 @@ The current test suite focuses on unit-level behavior of individual services and
 - OpenRouter API call flow (summarization and relevance scoring) with live HTTP
 - RSS feed parsing with real feed data
 - Enrichment with blocked domains and image fallback
-- LangGraphics asset syncing
 
 When adding tests, follow the existing pattern: construct `Article` objects directly, call service functions, assert on return values. No mocking framework is used — tests are purely deterministic.

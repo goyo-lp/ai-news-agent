@@ -1,6 +1,6 @@
 # Integrations
 
-The AI News Agent integrates with five external services: OpenRouter (LLM), Telegram (delivery), LangSmith (observability), LangGraphics (visualization), and RSS feeds (data source).
+The AI News Agent integrates with four external services: OpenRouter (LLM), Telegram (delivery), LangSmith (observability), and RSS feeds (data source).
 
 ## OpenRouter (LLM Summarization)
 
@@ -56,17 +56,6 @@ In addition to summarization, the OpenRouter client provides `score_articles_rel
 - **Project**: Defaults to `ai-news-agent`
 - **Tracing**: Enabled by default (`LANGSMITH_TRACING=true`)
 
-## LangGraphics (Live Visualization)
-
-**Sources**: `src/app/graph/workflow.py`, `src/app/services/langgraphics_assets.py`
-
-- **Wrapping**: `langgraphics.watch(compiled_graph)` wraps the compiled graph and starts a live UI
-- **HTTP UI**: `http://localhost:{LANGGRAPHICS_PORT}` (default 8764)
-- **WebSocket**: `ws://localhost:{LANGGRAPHICS_WS_PORT}` (default 8765)
-- **Asset management**: `ensure_langgraphics_static_assets()` copies vendored web assets from `src/app/assets/langgraphics_static/` into the installed `langgraphics/static/` directory (only if not already present)
-- **Config flags**: `LANGGRAPHICS_ENABLED`, `LANGGRAPHICS_OPEN_BROWSER`, `LANGGRAPHICS_HOST`, `LANGGRAPHICS_PORT`, `LANGGRAPHICS_WS_PORT`, `LANGGRAPHICS_DIRECTION` (TB), `LANGGRAPHICS_MODE` (auto), `LANGGRAPHICS_INSPECT` (off), `LANGGRAPHICS_THEME` (system)
-- **Disabled mode**: When `LANGGRAPHICS_ENABLED=false`, `build_workflow()` returns the raw compiled graph without wrapping
-
 ## RSS Sources
 
 **Source**: `data/news-sources.yaml`, `src/app/services/rss_client.py`
@@ -76,8 +65,8 @@ The YAML file has two top-level keys:
 - `fetch_defaults`: Default `FetchRules` for all sources (image fallback, user-agent requirement, blocked domains)
 - `sources`: List of source configs, each with `name`, `url`, `rss`, and optional `fetch_overrides`
 
-### Current Sources (20+)
-Major outlets include: TLDR AI, TechCrunch (AI), The Verge (AI), Wired (AI), MIT Technology Review, VentureBeat (AI), ZDNet (AI), The Guardian (AI), OpenAI Blog, Google DeepMind Blog, BAIR Blog, NVIDIA Blog, AWS ML Blog, Apple ML Journal, AI News, AI Business, AI Magazine, KDNuggets, Towards Data Science, Machine Learning Mastery, Unite.AI, MarkTechPost, Analytics Vidhya, InfoQ (AI/ML).
+### Current Sources
+Major outlets include: TLDR AI, TechCrunch (AI), The Verge (AI), Wired (AI), Ars Technica (AI), MIT Technology Review, VentureBeat (AI), ZDNet (AI), The Guardian (AI), AI News, InfoQ (AI/ML), OpenAI Blog, Google DeepMind Blog, Google AI Blog, NVIDIA Blog (AI), AWS ML Blog, Apple ML Journal, Hugging Face (Blog), BAIR Blog (Berkeley), MIT News (AI), arXiv.org (cs.AI), Hacker News (Top), GitHub Trending, Simon Willison, Reddit r/MachineLearning, Reddit r/artificial.
 
 ### Fetch Behavior
 - Uses `feedparser` to parse RSS/Atom feeds

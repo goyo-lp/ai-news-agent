@@ -4,15 +4,14 @@
 
 ### Prerequisites
 - Python 3.11+
+- [uv](https://docs.astral.sh/uv/) for dependency management
 - A Telegram bot token and chat ID (for real runs)
 - An OpenRouter API key (for real summaries)
 
 ### Installation
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+uv sync
 ```
 
 ### Environment Variables
@@ -32,8 +31,6 @@ Copy `.env.example` to `.env` and fill in values:
 | `LANGSMITH_API_KEY` | Recommended | — | Observability |
 | `LANGSMITH_PROJECT` | No | `ai-news-agent` | Trace project |
 | `LANGSMITH_TRACING` | No | `true` | Enable tracing |
-| `LANGGRAPHICS_ENABLED` | No | `true` | Live graph UI |
-| `LANGGRAPHICS_OPEN_BROWSER` | No | `true` | Auto-open browser |
 | `SOURCES_FILE` | No | `data/news-sources.yaml` | RSS source config |
 | `HISTORY_FILE` | No | `data/delivery-history.json` | Delivery history for dedup |
 | `HISTORY_RETENTION_DAYS` | No | `14` | How long delivered URLs are remembered |
@@ -41,6 +38,7 @@ Copy `.env.example` to `.env` and fill in values:
 | `HTTP_CONCURRENCY` | No | `8` | Parallel HTTP requests |
 | `MAX_FEED_ITEMS_PER_SOURCE` | No | `50` | RSS items per feed |
 | `MAX_ARTICLES_PER_RUN` | No | `50` | Max articles delivered |
+| `MAX_ARTICLES_PER_SOURCE` | No | `3` | Max articles from a single source per digest |
 | `USER_AGENT` | No | `AINewsAgent/0.1` | HTTP User-Agent |
 
 ### Getting Telegram Chat ID
@@ -58,33 +56,25 @@ All commands run from the project root.
 
 ```bash
 # Dry run — no Telegram sends, no LLM calls (template summaries)
-PYTHONPATH=src python -m app.main run --dry-run
+uv run ai-news-agent run --dry-run
 
 # Real run — sends Telegram messages with LLM summaries
-PYTHONPATH=src python -m app.main run
+uv run ai-news-agent run
 
 # Limit output
-PYTHONPATH=src python -m app.main run --limit 25
+uv run ai-news-agent run --limit 25
 
 # Verbose/debug logging
-PYTHONPATH=src python -m app.main run --verbose
+uv run ai-news-agent run --verbose
 
 # Equivalent one-liner
-source .venv/bin/activate && PYTHONPATH=src python -m app.main run
+uv run ai-news-agent run
 ```
 
 ### Exit Codes
 - `0` — Success (all deliveries sent or dry-run)
 - `1` — One or more delivery failures
 - `2` — Configuration error (missing required env vars)
-
-## LangGraphics
-
-LangGraphics starts automatically when `LANGGRAPHICS_ENABLED=true`:
-- HTTP UI: `http://localhost:8764`
-- WS stream: `ws://localhost:8765`
-
-To disable: set `LANGGRAPHICS_ENABLED=false`.
 
 ## Troubleshooting
 
@@ -106,19 +96,23 @@ Some RSS feeds block bots or rate-limit aggressively. This is non-fatal — the 
 ### `Run complete. selected=0 ...`
 Likely causes:
 1. No articles published today (date filter excludes older articles)
-2. RSS feeds returned no items
-3. `published_at` parsing failed for all entries
+2. All fresh stories were already delivered in a prior run (delivery-history dedup)
+3. RSS feeds returned no items
+4. `published_at` parsing failed for all entries
 
-### LangGraphics not appearing
-1. Check `LANGGRAPHICS_ENABLED=true`
-2. Verify `langgraphics` is installed (`pip show langgraphics`)
-3. Check that port 8764 is not already in use
-4. Set `LANGGRAPHICS_OPEN_BROWSER=false` and open `http://localhost:8764` manually
+To reset the dedup window, delete or edit `data/delivery-history.json`.
 
 ## CI/CD
 
-**Source**: `.github/workflows/openwiki-update.yml`
+**Sources**: `.github/workflows/ci.yml`, `.github/workflows/openwiki-update.yml`
 
+### CI (ci.yml)
+Runs on push/PR to `main`. Uses `uv` to install Python 3.11, sync dependencies, then runs:
+- `ruff check .`
+- `mypy src`
+- `pytest -q`
+
+### OpenWiki Update (openwiki-update.yml)
 A GitHub Actions workflow runs daily at 08:00 UTC (`cron: "0 8 * * *"`) or on manual dispatch. It:
 1. Installs OpenWiki (`npm install --global openwiki`)
 2. Runs `openwiki code --update --print` to regenerate documentation
