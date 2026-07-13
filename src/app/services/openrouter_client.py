@@ -129,16 +129,17 @@ class OpenRouterClient:
                     "role": "system",
                     "content": (
                         "You summarize AI news for a Telegram digest. "
-                        "Return exactly 3 concise factual sentences about what the article reports "
-                        "and why it matters. Do not name or allude to the publisher, source, or "
-                        "author. Output ONLY the 3 sentences — no reasoning, no preamble, no "
-                        "labels, no meta-commentary about the task."
+                        "Return exactly 3 short factual sentences (aim for under 20 words each) "
+                        "about what the article reports and why it matters. Strip filler and "
+                        "hedge words. Do not name or allude to the publisher, source, or author. "
+                        "Output ONLY the 3 sentences — no reasoning, no preamble, no labels, no "
+                        "meta-commentary about the task."
                     ),
                 },
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.2,
-            "max_tokens": 220,
+            "max_tokens": 10000,
         }
 
         try:
@@ -213,7 +214,7 @@ class OpenRouterClient:
             "model": self.settings.openrouter_model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.0,
-            "max_tokens": 100 + 10 * len(articles),
+            "max_tokens": 10000,
         }
 
         try:
@@ -268,20 +269,21 @@ class OpenRouterClient:
             f"Published: {published}\n"
             f"URL: {article.url}\n"
             f"Context: {context}\n"
-            "Summarize what this article reports and why it matters, in exactly 3 sentences. "
-            "Focus on the article's content only — do not mention the publisher or who wrote it. "
-            "Output only the 3 sentences."
+            "Summarize what this article reports and why it matters, in exactly 3 short "
+            "sentences (under 20 words each). Keep each sentence tight and factual. "
+            "Focus on the article's content only — do not mention the publisher or "
+            "who wrote it. Output only the 3 sentences."
         )
 
     def _fallback_summary(self, article: Article) -> str:
         context = article.effective_summary_source.strip()
         title_sentence = f"{article.effective_title} is a notable AI update."
         context_sentence = (
-            f"Key context: {context[:180].rstrip('.')}."
+            f"Key context: {context[:120].rstrip('.')}."
             if context
-            else "The story appears relevant to current AI research and product developments."
+            else "Relevant to current AI research and product developments."
         )
-        action_sentence = "Open the link to review full details, claims, and technical context."
+        action_sentence = "See the link for full details."
         return enforce_sentence_count(
             f"{title_sentence} {context_sentence} {action_sentence}",
             count=3,
