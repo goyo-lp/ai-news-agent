@@ -119,6 +119,53 @@ def test_rank_articles_uses_description_for_relevance_signals() -> None:
     assert ranked[0].id == "deal"
 
 
+def test_rank_articles_caps_items_per_source() -> None:
+    distinct_titles = [
+        "Medical agents for clinical decision benchmarks",
+        "Warehouse robotics planning with vision transformers",
+        "Speech synthesis evaluation across low resource languages",
+        "Graph neural networks for protein folding dynamics",
+        "Reinforcement learning in autonomous driving simulators",
+        "Quantum circuit optimization via evolutionary search",
+        "Federated training privacy guarantees under drift",
+        "Tabular foundation embeddings for credit scoring",
+        "Video diffusion architectures with temporal attention",
+        "Multilingual retrieval augmentation for legal corpora",
+    ]
+    flood = [
+        _article(f"arxiv{idx}", "arXiv.org (cs.AI)", 1, title=title)
+        for idx, title in enumerate(distinct_titles)
+    ]
+    other = _article("news1", "TechCrunch (AI)", 2, title="Anthropic launches new Claude model")
+
+    ranked = rank_articles(flood + [other], limit=20, max_per_source=3)
+
+    per_source: dict[str, int] = {}
+    for item in ranked:
+        per_source[item.source_name] = per_source.get(item.source_name, 0) + 1
+    assert per_source["arXiv.org (cs.AI)"] == 3
+    assert per_source["TechCrunch (AI)"] == 1
+    assert len(ranked) == 4
+
+
+def test_rank_articles_boosts_frontier_company_mentions() -> None:
+    frontier = _article(
+        "frontier",
+        "Unknown",
+        2,
+        title="Anthropic ships Claude update with new coding features",
+    )
+    generic = _article(
+        "generic",
+        "Unknown",
+        2,
+        title="Researchers ship update with new coding features",
+    )
+
+    ranked = rank_articles([generic, frontier], limit=20)
+    assert ranked[0].id == "frontier"
+
+
 def test_rank_articles_penalizes_recently_delivered_titles() -> None:
     repeat = _article(
         "repeat",

@@ -22,6 +22,9 @@ class SourceConfig(BaseModel):
     name: str
     url: str
     rss: str
+    # For feeds whose entries carry no publish date (e.g. GitHub Trending):
+    # stamp fetch time so the today-filter doesn't drop every item.
+    assume_published_now: bool = False
     fetch_overrides: SourceFetchOverrides | None = None
 
     def merged_rules(self, defaults: FetchRules) -> FetchRules:

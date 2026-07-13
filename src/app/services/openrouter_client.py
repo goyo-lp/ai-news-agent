@@ -153,9 +153,12 @@ class OpenRouterClient:
             lines.append(line)
 
         prompt = (
-            "Rate each AI news item from 0 to 100 for relevance to a digest focused on "
-            "product launches, model releases, startup funding, enterprise adoption, and "
-            "major deals. Penalize event roundups, tutorials, opinion pieces, and podcasts.\n\n"
+            "Rate each AI news item from 0 to 100 for relevance to a daily digest that tracks: "
+            "frontier AI company updates (OpenAI, Anthropic, Google/Gemini, xAI, Meta, Mistral, "
+            "DeepSeek, Cursor), new model releases including open-source/open-weights models, "
+            "AI startup funding rounds, major product launches, and trending open-source/GitHub "
+            "projects. Penalize academic paper abstracts, event roundups, tutorials, opinion "
+            "pieces, and podcasts.\n\n"
             + "\n".join(lines)
             + '\n\nReturn only a JSON object mapping item number to score, e.g. {"1": 85, "2": 20}.'
         )

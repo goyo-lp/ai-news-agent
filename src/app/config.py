@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     http_concurrency: int = 8
     max_feed_items_per_source: int = 50
     max_articles_per_run: int = 50
+    max_articles_per_source: int = 3
     user_agent: str = "AINewsAgent/0.1"
 
     model_config = SettingsConfigDict(

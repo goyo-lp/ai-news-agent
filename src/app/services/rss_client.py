@@ -147,6 +147,8 @@ class RSSClient:
             title = str(entry.get("title") or "Untitled Article").strip()
             description = str(entry.get("summary") or entry.get("description") or "").strip() or None
             published_at = parse_entry_datetime(entry)
+            if published_at is None and source.assume_published_now:
+                published_at = datetime.now(timezone.utc)
             rss_image_url = extract_entry_image(entry)
 
             article = Article(

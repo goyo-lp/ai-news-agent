@@ -190,7 +190,7 @@
     <div class="grid cards">
       <div class="card"><div class="k">Pipeline</div><div class="v"><b>ingest → enrich → rank → summarize → deliver</b><br><span class="muted">LangGraph <code>StateGraph</code> wired in <code>graph/workflow.py:20-36</code>; conditional edge after <code>rank</code> jumps to END when nothing survives</span></div></div>
       <div class="card"><div class="k">Trigger</div><div class="v"><b>Manual CLI</b> — no scheduler, no DB<br><span class="muted">delivery history persists across runs in <code>data/delivery-history.json</code></span></div></div>
-      <div class="card"><div class="k">Sources</div><div class="v"><b>30 RSS feeds</b> in <code>data/news-sources.yaml</code><br><span class="muted">TLDR AI, TechCrunch, The Verge, arXiv cs.AI, HN, Reddit, vendor blogs…</span></div></div>
+      <div class="card"><div class="k">Sources</div><div class="v"><b>26 RSS feeds</b> in <code>data/news-sources.yaml</code><br><span class="muted">TLDR AI, TechCrunch, The Verge, GitHub Trending, Simon Willison, arXiv cs.AI, HN top, lab blogs… capped at 3 stories/source</span></div></div>
       <div class="card"><div class="k">AI use</div><div class="v"><b>Summarization + batched re-rank</b><br><span class="muted">keyword base score; one optional LLM call blends into ranking (skipped on dry-run/no key)</span></div></div>
       <div class="card"><div class="k">Delivery</div><div class="v"><b>Telegram</b> — 1 message/story<br><span class="muted"><code>sendPhoto</code> with caption, fallback to <code>sendMessage</code></span></div></div>
       <div class="card"><div class="k">Observability</div><div class="v"><b>LangSmith</b> traces + <b>LangGraphics</b> live UI<br><span class="muted"><code>localhost:8764</code> web, <code>8765</code> WS</span></div></div>
@@ -315,7 +315,7 @@
       <ul class="dotlist mono" style="font-size:12px;color:var(--muted)">
         <li><code>cluster_articles()</code> (scoring.py:363) — greedy, newest-first, via <code>_same_story()</code></li>
         <li><code>score_article()</code> (scoring.py:387) per member — weighted blend, novelty vs delivered titles</li>
-        <li>pick max-score representative per cluster → sort desc → keep pool of ≤40 candidates</li>
+        <li>pick max-score representative per cluster → sort desc → cap at 3/source → keep pool of ≤40 candidates</li>
         <li><code>score_articles_relevance()</code> (openrouter_client.py:133) — one batched LLM call; blend <code>0.7·score + 0.3·llm</code>, re-sort (skipped on dry-run / no key / failure)</li>
         <li>cut to top <code>limit</code> (≤50)</li>
       </ul>
@@ -462,8 +462,8 @@
     <div class="grid cards" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
 
       <div class="int" style="--c:var(--ingest)">
-        <div class="h"><div class="ic">📡</div><div><div class="nm">RSS feeds (30 sources)</div><div class="type">data source · HTTP GET</div></div></div>
-        <div class="body">Pulls AI news from ~30 feeds: TLDR AI, TechCrunch, The Verge, Wired, MIT Tech Review, VentureBeat, ZDNet, OpenAI/DeepMind/BAIR/NVIDIA/AWS/Apple blogs, arXiv cs.AI, Hugging Face, Reddit r/ML + r/artificial, Hacker News, LessWrong, Kaggle…</div>
+        <div class="h"><div class="ic">📡</div><div><div class="nm">RSS feeds (26 sources)</div><div class="type">data source · HTTP GET</div></div></div>
+        <div class="body">Pulls AI news from 26 feeds: TLDR AI, TechCrunch, The Verge, Wired, MIT Tech Review, VentureBeat, ZDNet, Ars Technica, OpenAI/DeepMind/Google AI/BAIR/NVIDIA/AWS/Apple blogs, Hugging Face, arXiv cs.AI, GitHub Trending (fetch-time stamped via <code>assume_published_now</code>), Simon Willison, HN frontpage ≥100pts, Reddit r/ML + r/artificial…</div>
         <span class="ref">services/rss_client.py:131 fetch_source() · data/news-sources.yaml</span>
       </div>
 
@@ -519,7 +519,7 @@ score = <span class="w">0.38</span>·<span class="c">relevance</span>
     </div>
 
     <div class="grid cards" style="margin-top:14px">
-      <div class="card"><div class="k">relevance (0.38)</div><div class="v">Tokenize title+summary; sum boosts across 5 keyword categories (product launch, tech dev, startup funding, enterprise adoption, deals). High-phrase hits +0.07 (max 2); low-priority penalty 0.08–0.22. Clamped 0–1.</div></div>
+      <div class="card"><div class="k">relevance (0.38)</div><div class="v">Tokenize title+summary; sum boosts across 6 keyword categories (product launch, tech dev, startup funding, enterprise adoption, deals, frontier companies — OpenAI/Anthropic/Gemini/xAI/Cursor/…). High-phrase hits +0.07 (max 2); low-priority penalty 0.08–0.22. Clamped 0–1.</div></div>
       <div class="card"><div class="k">recency (0.24)</div><div class="v">≤6h=1.0 · ≤24h=0.8 · ≤48h=0.6 · ≤96h=0.4 · else=0.2 · None=0.3</div></div>
       <div class="card"><div class="k">source_weight (0.14)</div><div class="v">11 hardcoded reputations: OpenAI/DeepMind/Anthropic/Meta = <b>1.0</b> → ZDNet = 0.80; default 0.70</div></div>
       <div class="card"><div class="k">duplication (0.10)</div><div class="v">Boosted by <code>duplicate_count</code> (same URL across feeds, within one run)</div></div>
@@ -639,6 +639,7 @@ Write exactly 3 sentences focused on key facts and why this matters.
         <tr><td class="mono">HTTP_CONCURRENCY</td><td>8</td><td><span class="opt">no</span></td><td>Parallel HTTP requests</td></tr>
         <tr><td class="mono">MAX_FEED_ITEMS_PER_SOURCE</td><td>50</td><td><span class="opt">no</span></td><td>RSS items per feed</td></tr>
         <tr><td class="mono">MAX_ARTICLES_PER_RUN</td><td>50</td><td><span class="opt">no</span></td><td>Max articles delivered</td></tr>
+        <tr><td class="mono">MAX_ARTICLES_PER_SOURCE</td><td>3</td><td><span class="opt">no</span></td><td>Per-source cap in final selection (anti-flooding)</td></tr>
         <tr><td class="mono">USER_AGENT</td><td class="mono">AINewsAgent/0.1</td><td><span class="opt">no</span></td><td>HTTP User-Agent</td></tr>
       </tbody>
     </table>

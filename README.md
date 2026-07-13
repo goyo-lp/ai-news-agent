@@ -13,6 +13,7 @@ LangGraph-based AI news pipeline that pulls RSS sources, enriches articles with 
 - Skips stories already delivered in a previous run (tracked in `data/delivery-history.json`)
 - Clusters cross-source same-story coverage and keeps one representative
 - Ranks candidates deterministically, then optionally re-ranks the top pool with one batched OpenRouter call
+- Caps each source at `MAX_ARTICLES_PER_SOURCE` (default 3) so no single feed floods the digest
 - Selects up to 50 stories per run (or fewer if less are available)
 - Generates exactly 3-sentence summaries
 - Sends one Telegram message per selected story
@@ -24,6 +25,7 @@ Ranking now prioritizes relevance to high-signal AI business and product develop
 
 Primary relevance signals:
 - New tech/model/features/product launches
+- Frontier company mentions (OpenAI, Anthropic, Gemini/DeepMind, xAI, Cursor, Mistral, DeepSeek, open-source models)
 - New startups and funding activity
 - Technical developments and breakthroughs
 - Enterprise adoption/deployments

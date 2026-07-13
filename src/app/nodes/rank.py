@@ -72,6 +72,7 @@ async def rank_node(state: AgentState) -> AgentState:
         fresh_articles,
         limit=max(limit, _LLM_RERANK_POOL),
         recent_titles=delivered_titles(history),
+        max_per_source=settings.max_articles_per_source,
     )
 
     client = OpenRouterClient(settings)

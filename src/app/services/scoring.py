@@ -12,13 +12,23 @@ _SOURCE_WEIGHTS = {
     "google deepmind blog": 1.0,
     "anthropic blog": 1.0,
     "meta ai blog": 1.0,
+    "google ai blog": 0.95,
     "mit technology review": 0.92,
     "techcrunch (ai)": 0.9,
+    "simon willison": 0.9,
     "the verge (ai)": 0.88,
     "wired (ai)": 0.88,
+    "ars technica (ai)": 0.88,
     "venturebeat (ai)": 0.87,
+    "hacker news (top)": 0.85,
     "the guardian (ai)": 0.85,
+    "github trending": 0.8,
     "zdnet (ai)": 0.8,
+    # High-volume, low-editorial feeds: demote so they season the digest
+    # instead of flooding it.
+    "reddit r/machinelearning": 0.62,
+    "reddit r/artificial": 0.6,
+    "arxiv.org (cs.ai)": 0.5,
 }
 
 _STOPWORDS = {
@@ -153,6 +163,29 @@ _ENTERPRISE_ADOPTION_KEYWORDS = {
     "productivity",
 }
 
+_FRONTIER_KEYWORDS = {
+    "openai",
+    "chatgpt",
+    "gpt",
+    "anthropic",
+    "claude",
+    "gemini",
+    "deepmind",
+    "xai",
+    "grok",
+    "cursor",
+    "copilot",
+    "llama",
+    "mistral",
+    "deepseek",
+    "qwen",
+    "nvidia",
+    "huggingface",
+    "perplexity",
+    "windsurf",
+    "midjourney",
+}
+
 _DEAL_KEYWORDS = {
     "deal",
     "deals",
@@ -205,6 +238,8 @@ _HIGH_RELEVANCE_PHRASES = {
     "production deployment",
     "strategic partnership",
     "signed a deal",
+    "open source model",
+    "open weights",
 }
 
 _LOW_PRIORITY_PHRASES = {
@@ -261,8 +296,9 @@ def _relevance_score(article: Article) -> float:
     startup_hits = len(tokens & _STARTUP_FUNDING_KEYWORDS)
     enterprise_hits = len(tokens & _ENTERPRISE_ADOPTION_KEYWORDS)
     deal_hits = len(tokens & _DEAL_KEYWORDS)
+    frontier_hits = len(tokens & _FRONTIER_KEYWORDS)
     total_priority_hits = (
-        product_hits + tech_hits + startup_hits + enterprise_hits + deal_hits
+        product_hits + tech_hits + startup_hits + enterprise_hits + deal_hits + frontier_hits
     )
 
     score += _boost_from_hits(product_hits, base=0.28, extra=0.03)
@@ -270,6 +306,7 @@ def _relevance_score(article: Article) -> float:
     score += _boost_from_hits(startup_hits, base=0.24, extra=0.03)
     score += _boost_from_hits(enterprise_hits, base=0.22, extra=0.03)
     score += _boost_from_hits(deal_hits, base=0.20, extra=0.03)
+    score += _boost_from_hits(frontier_hits, base=0.24, extra=0.04)
 
     high_phrase_hits = _count_phrase_hits(normalized_content, _HIGH_RELEVANCE_PHRASES)
     low_phrase_hits = _count_phrase_hits(normalized_content, _LOW_PRIORITY_PHRASES)
@@ -411,6 +448,7 @@ def rank_articles(
     articles: list[Article],
     limit: int,
     recent_titles: list[str] | None = None,
+    max_per_source: int | None = None,
 ) -> list[Article]:
     candidates = [article.model_copy(deep=True) for article in articles]
     story_clusters = cluster_articles(candidates)
@@ -443,4 +481,19 @@ def rank_articles(
         ),
         reverse=True,
     )
-    return representatives[:limit]
+
+    if max_per_source is None:
+        return representatives[:limit]
+
+    # One prolific feed (e.g. arXiv's daily batch) must not fill every slot.
+    # No backfill past the cap: a quiet day yields a shorter digest.
+    selected: list[Article] = []
+    per_source: dict[str, int] = {}
+    for article in representatives:
+        if per_source.get(article.source_name, 0) >= max_per_source:
+            continue
+        selected.append(article)
+        per_source[article.source_name] = per_source.get(article.source_name, 0) + 1
+        if len(selected) >= limit:
+            break
+    return selected
