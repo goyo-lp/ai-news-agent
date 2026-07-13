@@ -12,6 +12,11 @@ from app.nodes.summarize import summarize_node
 from app.services.langgraphics_assets import ensure_langgraphics_static_assets
 
 
+def route_after_rank(state: AgentState) -> str:
+    """Skip summarize/deliver when nothing survived the rank filters."""
+    return "summarize" if state.get("articles_selected") else END
+
+
 def build_workflow():
     settings = get_settings()
     graph = StateGraph(AgentState)
@@ -25,7 +30,7 @@ def build_workflow():
     graph.set_entry_point("ingest")
     graph.add_edge("ingest", "enrich")
     graph.add_edge("enrich", "rank")
-    graph.add_edge("rank", "summarize")
+    graph.add_conditional_edges("rank", route_after_rank, {"summarize": "summarize", END: END})
     graph.add_edge("summarize", "deliver")
     graph.add_edge("deliver", END)
 

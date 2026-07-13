@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from datetime import timezone
@@ -13,6 +14,31 @@ from app.schemas.article import Article
 logger = logging.getLogger(__name__)
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+_JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def parse_relevance_scores(text: str, valid_keys: set[str]) -> dict[str, float]:
+    """Parse a JSON object of 0-100 scores into {key: 0.0-1.0}, dropping anything malformed."""
+    match = _JSON_OBJECT.search(text)
+    if not match:
+        return {}
+    try:
+        raw = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+
+    scores: dict[str, float] = {}
+    for key, value in raw.items():
+        if key not in valid_keys:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        scores[key] = max(0.0, min(number / 100.0, 1.0))
+    return scores
 
 
 def split_sentences(text: str) -> list[str]:
@@ -66,14 +92,7 @@ class OpenRouterClient:
             return self._fallback_summary(article)
 
         prompt = self._build_prompt(article)
-        headers = {
-            "Authorization": f"Bearer {self.settings.openrouter_api_key}",
-            "Content-Type": "application/json",
-        }
-        if self.settings.openrouter_site_url:
-            headers["HTTP-Referer"] = self.settings.openrouter_site_url
-        if self.settings.openrouter_app_name:
-            headers["X-Title"] = self.settings.openrouter_app_name
+        headers = self._build_headers()
 
         payload = {
             "model": self.settings.openrouter_model,
@@ -110,6 +129,64 @@ class OpenRouterClient:
         except Exception as exc:
             logger.warning("OpenRouter call failed for %s: %s", article.id, exc)
             return self._fallback_summary(article)
+
+    async def score_articles_relevance(
+        self,
+        articles: list[Article],
+        dry_run: bool,
+    ) -> dict[str, float]:
+        """One batched call scoring each article's relevance, as {article_id: 0.0-1.0}.
+
+        Returns an empty dict when skipped (dry-run, no key) or on any failure,
+        which callers treat as "keep the deterministic ranking".
+        """
+        if dry_run or not self.settings.openrouter_api_key or not articles:
+            return {}
+
+        index_to_id = {str(idx + 1): article.id for idx, article in enumerate(articles)}
+        lines = []
+        for idx, article in enumerate(articles):
+            context = article.effective_summary_source.strip()[:200]
+            line = f"{idx + 1}. {article.effective_title}"
+            if context:
+                line += f" — {context}"
+            lines.append(line)
+
+        prompt = (
+            "Rate each AI news item from 0 to 100 for relevance to a digest focused on "
+            "product launches, model releases, startup funding, enterprise adoption, and "
+            "major deals. Penalize event roundups, tutorials, opinion pieces, and podcasts.\n\n"
+            + "\n".join(lines)
+            + '\n\nReturn only a JSON object mapping item number to score, e.g. {"1": 85, "2": 20}.'
+        )
+
+        payload = {
+            "model": self.settings.openrouter_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
+            "max_tokens": 100 + 10 * len(articles),
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds) as client:
+                content = await self._request_summary(client, self._build_headers(), payload)
+        except Exception as exc:
+            logger.warning("OpenRouter relevance scoring failed: %s", exc)
+            return {}
+
+        by_index = parse_relevance_scores(content, set(index_to_id))
+        return {index_to_id[key]: value for key, value in by_index.items()}
+
+    def _build_headers(self) -> dict[str, str]:
+        headers = {
+            "Authorization": f"Bearer {self.settings.openrouter_api_key}",
+            "Content-Type": "application/json",
+        }
+        if self.settings.openrouter_site_url:
+            headers["HTTP-Referer"] = self.settings.openrouter_site_url
+        if self.settings.openrouter_app_name:
+            headers["X-Title"] = self.settings.openrouter_app_name
+        return headers
 
     async def _request_summary(
         self,

@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     langgraphics_theme: str = "system"
 
     sources_file: str = "data/news-sources.yaml"
+    history_file: str = "data/delivery-history.json"
+    history_retention_days: int = 14
     request_timeout_seconds: int = 20
     http_concurrency: int = 8
     max_feed_items_per_source: int = 50

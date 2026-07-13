@@ -52,7 +52,7 @@ async def run_pipeline(args: argparse.Namespace) -> int:
     workflow = build_workflow()
     final_state = await workflow.ainvoke(initial_state)
 
-    selected_count = len(final_state.get("articles_top20", []))
+    selected_count = len(final_state.get("articles_selected", []))
     deliveries = final_state.get("delivery_results", [])
     attempted_count = len(deliveries)
     failed_count = len([item for item in deliveries if item.get("status") == "error"])

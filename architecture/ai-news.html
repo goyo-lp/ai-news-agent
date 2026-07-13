@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI News Agent — Architecture</title>
+<style>
+  :root{
+    --bg:#0b1020; --bg2:#0f172a; --panel:#111a30; --panel2:#16213f;
+    --line:#243352; --text:#e6edf6; --muted:#8a9bbd; --dim:#5b6b8c;
+    --acc:#5b8cff; --acc2:#22d3ee; --green:#34d399; --amber:#fbbf24;
+    --pink:#f472b6; --purple:#a78bfa; --red:#f87171;
+    --ingest:#38bdf8; --enrich:#a78bfa; --rank:#fbbf24;
+    --summarize:#34d399; --deliver:#f472b6;
+    --radius:14px; --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:
+      radial-gradient(1200px 600px at 80% -10%, #1b2a55 0%, transparent 60%),
+      radial-gradient(900px 500px at -10% 20%, #1a2342 0%, transparent 55%),
+      var(--bg);
+    color:var(--text); font:15px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--acc2);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code,pre,.mono{font-family:var(--mono)}
+  .wrap{max-width:1240px;margin:0 auto;padding:0 24px}
+
+  /* Header */
+  header.hero{
+    padding:56px 0 28px; border-bottom:1px solid var(--line);
+  }
+  .hero .tag{color:var(--acc2);font-size:12px;letter-spacing:.18em;text-transform:uppercase;font-weight:600}
+  h1{font-size:clamp(28px,4vw,46px);margin:10px 0 6px;letter-spacing:-.02em;line-height:1.05}
+  .hero p.lede{color:var(--muted);max-width:760px;font-size:17px;margin:6px 0 0}
+  .hero .meta{display:flex;gap:18px;flex-wrap:wrap;margin-top:18px;color:var(--dim);font-size:13px}
+  .hero .meta b{color:var(--text);font-weight:600}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border:1px solid var(--line);border-radius:999px;background:var(--panel);font-size:12px;color:var(--muted)}
+  .pill .dot{width:7px;height:7px;border-radius:50%;background:var(--acc)}
+
+  /* Nav */
+  nav.toc{
+    position:sticky;top:0;z-index:30;background:rgba(11,16,32,.82);backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--line);margin:24px 0 0;
+  }
+  nav.toc .wrap{display:flex;gap:6px;overflow-x:auto;padding:10px 24px}
+  nav.toc a{color:var(--muted);padding:6px 12px;border-radius:8px;white-space:nowrap;font-size:13px}
+  nav.toc a:hover{background:var(--panel);color:var(--text);text-decoration:none}
+
+  section{padding:46px 0;border-bottom:1px solid var(--line)}
+  h2{font-size:clamp(22px,2.6vw,30px);margin:0 0 6px;letter-spacing:-.01em}
+  h2 .num{color:var(--dim);font-weight:500;margin-right:10px;font-variant-numeric:tabular-nums}
+  .sub{color:var(--muted);margin:0 0 22px;max-width:820px}
+  h3{font-size:17px;margin:24px 0 10px;color:#cdd9ee}
+  h4{font-size:14px;margin:18px 0 6px;color:#aebbd6;text-transform:uppercase;letter-spacing:.08em}
+
+  .grid{display:grid;gap:16px}
+  .cards{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+  .card{background:linear-gradient(180deg,var(--panel),var(--bg2));border:1px solid var(--line);border-radius:var(--radius);padding:16px 16px 14px}
+  .card .k{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim)}
+  .card .v{font-size:14px;color:#dbe5f5;margin-top:4px}
+  .card .v b{color:#fff}
+
+  /* Pipeline */
+  .pipe{display:grid;grid-template-columns:repeat(5,1fr);gap:0;align-items:stretch;margin:8px 0 6px}
+  .node{
+    position:relative;border:1px solid var(--line);border-top:4px solid var(--c);
+    background:linear-gradient(180deg, color-mix(in srgb, var(--c) 14%, var(--panel)), var(--bg2));
+    border-radius:12px;padding:14px 12px;margin:0 6px;min-height:150px;
+  }
+  .node .step{font:600 11px var(--mono);color:var(--c);letter-spacing:.12em}
+  .node .nm{font-weight:700;font-size:16px;margin:2px 0 2px}
+  .node .file{font-family:var(--mono);font-size:11px;color:var(--dim);word-break:break-all}
+  .node .fn{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:8px;display:block}
+  .node .out{font-size:11px;color:var(--green);margin-top:8px;font-family:var(--mono)}
+  .arrow{
+    position:absolute;right:-13px;top:50%;transform:translateY(-50%);z-index:2;
+    width:0;height:0;border-left:12px solid var(--line);border-top:9px solid transparent;border-bottom:9px solid transparent;
+  }
+  .arrow::after{content:"";position:absolute;left:-13px;top:-9px;border-left:12px solid var(--acc2);border-top:9px solid transparent;border-bottom:9px solid transparent;transform:translateX(-2px)}
+  .node:last-child .arrow{display:none}
+  @media(max-width:980px){.pipe{grid-template-columns:1fr 1fr;gap:10px}.node{margin:0}.arrow{display:none}}
+
+  /* State chips */
+  .stateflow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:14px}
+  .chip{font-family:var(--mono);font-size:11px;padding:4px 9px;border-radius:6px;background:var(--panel2);border:1px solid var(--line);color:#cdd9ee}
+  .chip.in{border-color:color-mix(in srgb,var(--green) 45%,var(--line));color:var(--green)}
+  .chip.out{border-color:color-mix(in srgb,var(--acc2) 45%,var(--line));color:var(--acc2)}
+  .arrow-x{color:var(--dim);font-size:14px}
+
+  /* Tables */
+  table{width:100%;border-collapse:collapse;font-size:13px;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:var(--panel2);color:#cdd9ee;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+  tr:last-child td{border-bottom:none}
+  td.mono,td code{font-size:12px;color:#a9b8d6}
+  td .req{color:var(--amber);font-weight:600}
+  td .opt{color:var(--dim)}
+
+  /* Layers */
+  .layer{border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:12px;background:var(--panel)}
+  .layer .lh{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .layer .lh .lvl{font:700 12px var(--mono);color:#0b1020;background:var(--acc2);padding:2px 8px;border-radius:6px}
+  .layer .lh .ttl{font-weight:700}
+  .layer .lh .desc{color:var(--muted);font-size:13px}
+  .files{display:flex;flex-wrap:wrap;gap:8px}
+  .file{font-family:var(--mono);font-size:11.5px;padding:5px 9px;border-radius:7px;background:var(--bg2);border:1px solid var(--line);color:#cdd9ee}
+  .file b{color:#fff}
+  .file .role{color:var(--dim);font-size:10.5px;display:block;margin-top:2px}
+
+  /* Integration cards */
+  .int{border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--panel);position:relative;overflow:hidden}
+  .int::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--c)}
+  .int .h{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .int .ic{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;font-weight:800;color:#0b1020;background:var(--c);font-size:15px}
+  .int .nm{font-weight:700}
+  .int .type{font-size:11px;color:var(--dim);font-family:var(--mono)}
+  .int .body{font-size:13px;color:var(--muted)}
+  .int .ref{font-family:var(--mono);font-size:11px;color:var(--acc2);margin-top:8px;display:block}
+
+  /* Scoring formula */
+  .formula{font-family:var(--mono);font-size:14px;background:#0a1326;border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;color:#dbe5f5;line-height:1.9}
+  .formula .w{color:var(--acc2)}
+  .formula .c{color:var(--green)}
+  .formula .cm{color:var(--dim)}
+  .formula .pl{color:var(--amber)}
+
+  .kbd{font-family:var(--mono);font-size:12px;background:var(--bg2);border:1px solid var(--line);border-bottom-width:2px;border-radius:6px;padding:2px 6px;color:#cdd9ee}
+
+  /* legend */
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin:10px 0 0}
+  .legend .sw{width:12px;height:12px;border-radius:3px;display:inline-block;margin-right:5px;vertical-align:-1px}
+
+  .note{background:color-mix(in srgb,var(--amber) 10%,var(--panel));border:1px solid color-mix(in srgb,var(--amber) 40%,var(--line));border-radius:10px;padding:12px 14px;font-size:13px;color:#fde9b8;margin:14px 0}
+  .note.ok{background:color-mix(in srgb,var(--green) 10%,var(--panel));border-color:color-mix(in srgb,var(--green) 40%,var(--line));color:#bff5dd}
+  .note b{color:#fff}
+
+  footer{padding:34px 0 60px;color:var(--dim);font-size:12px}
+  footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  .scrollbox{overflow:auto;max-height:340px}
+  .dotlist{margin:6px 0;padding-left:18px}
+  .dotlist li{margin:4px 0}
+  .muted{color:var(--muted)}
+  .ok{color:var(--green)}
+  .bad{color:var(--red)}
+</style>
+</head>
+<body>
+
+<!-- ============ HERO ============ -->
+<header class="hero">
+  <div class="wrap">
+    <div class="tag">LangGraph · Python 3.11+ · OpenRouter · Telegram</div>
+    <h1>AI News Agent — Architecture</h1>
+    <p class="lede">A LangGraph-based AI news digest agent that pulls ~30 AI-news RSS feeds, enriches each article with OpenGraph metadata, filters out previously delivered stories, clusters and ranks by a relevance-first formula (optionally blended with one batched LLM re-rank call), generates exactly 3-sentence LLM summaries via OpenRouter, and delivers one Telegram message per story.</p>
+    <div class="meta">
+      <span class="pill"><span class="dot"></span> 5-node graph + early-exit edge</span>
+      <span><b>Entry:</b> <code>src/app/main.py</code></span>
+      <span><b>Run:</b> <code>PYTHONPATH=src python -m app.main run</code></span>
+      <span><b>State:</b> per-run, plus JSON delivery history</span>
+    </div>
+  </div>
+</header>
+
+<!-- ============ NAV ============ -->
+<nav class="toc">
+  <div class="wrap">
+    <a href="#overview">Overview</a>
+    <a href="#pipeline">Pipeline</a>
+    <a href="#dataflow">Data Flow</a>
+    <a href="#stack">Tech Stack</a>
+    <a href="#layers">Layering</a>
+    <a href="#integrations">Integrations</a>
+    <a href="#scoring">Ranking</a>
+    <a href="#llm">LLM Usage</a>
+    <a href="#state">AgentState</a>
+    <a href="#config">Config</a>
+    <a href="#ops">Ops</a>
+  </div>
+</nav>
+
+<!-- ============ OVERVIEW ============ -->
+<section id="overview">
+  <div class="wrap">
+    <h2><span class="num">01</span>Overview</h2>
+    <p class="sub">Cuts through the noise of dozens of AI-news RSS feeds by clustering duplicate coverage, prioritizing high-signal business/product developments over low-signal event roundups, filtering to only today's articles, skipping stories already delivered in previous runs, and producing a clean Telegram digest with AI-written summaries.</p>
+    <div class="grid cards">
+      <div class="card"><div class="k">Pipeline</div><div class="v"><b>ingest → enrich → rank → summarize → deliver</b><br><span class="muted">LangGraph <code>StateGraph</code> wired in <code>graph/workflow.py:20-36</code>; conditional edge after <code>rank</code> jumps to END when nothing survives</span></div></div>
+      <div class="card"><div class="k">Trigger</div><div class="v"><b>Manual CLI</b> — no scheduler, no DB<br><span class="muted">delivery history persists across runs in <code>data/delivery-history.json</code></span></div></div>
+      <div class="card"><div class="k">Sources</div><div class="v"><b>30 RSS feeds</b> in <code>data/news-sources.yaml</code><br><span class="muted">TLDR AI, TechCrunch, The Verge, arXiv cs.AI, HN, Reddit, vendor blogs…</span></div></div>
+      <div class="card"><div class="k">AI use</div><div class="v"><b>Summarization + batched re-rank</b><br><span class="muted">keyword base score; one optional LLM call blends into ranking (skipped on dry-run/no key)</span></div></div>
+      <div class="card"><div class="k">Delivery</div><div class="v"><b>Telegram</b> — 1 message/story<br><span class="muted"><code>sendPhoto</code> with caption, fallback to <code>sendMessage</code></span></div></div>
+      <div class="card"><div class="k">Observability</div><div class="v"><b>LangSmith</b> traces + <b>LangGraphics</b> live UI<br><span class="muted"><code>localhost:8764</code> web, <code>8765</code> WS</span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ PIPELINE ============ -->
+<section id="pipeline">
+  <div class="wrap">
+    <h2><span class="num">02</span>The 5-Node Pipeline</h2>
+    <p class="sub">Each node is an <code>async def</code> decorated with <code>@traceable(name="..._node")</code>, receives <code>AgentState</code>, and returns an updated copy. Edges are wired in <code>build_workflow()</code> (<code>graph/workflow.py:20</code>); after <code>rank</code>, <code>route_after_rank()</code> (<code>workflow.py:15</code>) continues to <code>summarize</code> only if articles survived, else jumps to END.</p>
+
+    <div class="pipe">
+      <div class="node" style="--c:var(--ingest)">
+        <div class="step">STEP 1</div>
+        <div class="nm">Ingest</div>
+        <div class="file">nodes/ingest.py</div>
+        <span class="fn">ingest_node()</span>
+        <div class="out">→ articles_raw</div>
+        <div class="arrow"></div>
+      </div>
+      <div class="node" style="--c:var(--enrich)">
+        <div class="step">STEP 2</div>
+        <div class="nm">Enrich</div>
+        <div class="file">nodes/enrich.py</div>
+        <span class="fn">enrich_node()</span>
+        <div class="out">→ articles_enriched</div>
+        <div class="arrow"></div>
+      </div>
+      <div class="node" style="--c:var(--rank)">
+        <div class="step">STEP 3</div>
+        <div class="nm">Rank</div>
+        <div class="file">nodes/rank.py</div>
+        <span class="fn">rank_node()</span>
+        <div class="out">→ articles_selected</div>
+        <div class="arrow"></div>
+      </div>
+      <div class="node" style="--c:var(--summarize)">
+        <div class="step">STEP 4</div>
+        <div class="nm">Summarize</div>
+        <div class="file">nodes/summarize.py</div>
+        <span class="fn">summarize_node()</span>
+        <div class="out">→ articles_selected (+summary)</div>
+        <div class="arrow"></div>
+      </div>
+      <div class="node" style="--c:var(--deliver)">
+        <div class="step">STEP 5</div>
+        <div class="nm">Deliver</div>
+        <div class="file">nodes/deliver.py</div>
+        <span class="fn">deliver_node()</span>
+        <div class="out">→ delivery_results</div>
+      </div>
+    </div>
+
+    <div class="legend">
+      <span><span class="sw" style="background:var(--ingest)"></span>Ingest — load sources, fetch RSS, dedupe</span>
+      <span><span class="sw" style="background:var(--enrich)"></span>Enrich — OpenGraph + image fallback</span>
+      <span><span class="sw" style="background:var(--rank)"></span>Rank — today + history filter, score, cluster, LLM blend</span>
+      <span><span class="sw" style="background:var(--summarize)"></span>Summarize — OpenRouter 3 sentences</span>
+      <span><span class="sw" style="background:var(--deliver)"></span>Deliver — Telegram send + retry + record history</span>
+    </div>
+
+    <div class="stateflow">
+      <span class="muted" style="font-size:12px;margin-right:6px"><b>State field flow:</b></span>
+      <span class="chip">sources / fetch_defaults</span>
+      <span class="arrow-x">→</span>
+      <span class="chip">articles_raw</span>
+      <span class="arrow-x">→</span>
+      <span class="chip">articles_enriched</span>
+      <span class="arrow-x">→</span>
+      <span class="chip">articles_selected</span>
+      <span class="arrow-x">→</span>
+      <span class="chip">delivery_results</span>
+      <span class="chip in" style="margin-left:auto">+ errors[] (accumulated each node)</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============ DATA FLOW ============ -->
+<section id="dataflow">
+  <div class="wrap">
+    <h2><span class="num">03</span>End-to-End Data Flow</h2>
+    <p class="sub">Traced from CLI invocation through each node and the service it delegates to, with the exact <code>file:line</code> anchors.</p>
+
+    <h3>① CLI — <code>src/app/main.py</code></h3>
+    <div class="card">
+      <div class="v"><code>main()</code> <span class="muted">(main.py:88)</span> → parses <span class="kbd">run</span> subcommand → <code>run_pipeline()</code> <span class="muted">(main.py:29)</span> → <code>get_settings()</code> → <code>configure_langsmith_env()</code> → validates required fields (skips Telegram check in <span class="kbd">--dry-run</span>) → clamps <span class="kbd">--limit</span> to <b>[1,50]</b> → builds <code>AgentState</code> → <code>build_workflow()</code> → <code>await workflow.ainvoke(state)</code> → reports summary.</div>
+      <div class="v" style="margin-top:8px"><b>Exit codes:</b> <span class="ok">0</span> success · <span class="bad">1</span> delivery failures · <span class="bad">2</span> config error</div>
+    </div>
+
+    <h3>② Ingest — <code>nodes/ingest.py:15</code> → <code>services/rss_client.py</code></h3>
+    <div class="card">
+      <div class="v">Load <code>data/news-sources.yaml</code> (<code>load_sources</code> rss_client.py:125) → <code>fetch_all()</code> (rss_client.py:167) runs <code>asyncio.gather</code> with <code>Semaphore(http_concurrency=8)</code> and a shared <code>httpx.AsyncClient(follow_redirects=True)</code>, 20s timeout.</div>
+      <ul class="dotlist mono" style="font-size:12px;color:var(--muted)">
+        <li><code>fetch_source()</code> (rss_client.py:131): GET feed → <code>feedparser.parse</code> → cap at <code>max_feed_items_per_source</code> (50)</li>
+        <li><code>normalize_url()</code> (rss_client.py:34): strips utm_*, gclid, fbclid, mc_cid, mc_eid + fragment</li>
+        <li><code>parse_entry_datetime()</code> (rss_client.py:41): published/updated_parsed → UTC, fallback RFC-2822</li>
+        <li><code>extract_entry_image()</code> (rss_client.py:67): media_content / media_thumbnail / image links</li>
+        <li><code>build_article_id()</code> (rss_client.py:96): SHA-256 of <code>source|url|title</code>[:24]</li>
+        <li><code>dedupe_articles()</code> (rss_client.py:101): URL-keyed, keep newest, increment <code>duplicate_count</code></li>
+      </ul>
+      <div class="out ok" style="font-family:var(--mono);font-size:11px;margin-top:8px">STATE OUT: fetch_defaults, sources, articles_raw, errors</div>
+    </div>
+
+    <h3>③ Enrich — <code>nodes/enrich.py:15</code> → <code>services/extractor.py</code></h3>
+    <div class="card">
+      <div class="v">Reconstruct per-source <code>FetchRules</code> via <code>merged_rules()</code> → <code>OpenGraphExtractor.enrich_articles()</code> (extractor.py:47) concurrent gather.</div>
+      <ul class="dotlist mono" style="font-size:12px;color:var(--muted)">
+        <li><code>_enrich_one()</code> (extractor.py:71): if <code>is_domain_blocked()</code> → use <code>rss_image_url</code>, skip HTTP</li>
+        <li>else GET article URL; only parse <code>text/html</code></li>
+        <li><code>extract_open_graph_fields()</code> (extractor.py:18): BeautifulSoup+lxml, fallback og:* → twitter:* → description</li>
+        <li>re-normalize final URL after redirects via <code>normalize_url</code></li>
+        <li>image fallback → <code>rss_image_url</code> if no <code>og:image</code></li>
+      </ul>
+      <div class="out ok" style="font-family:var(--mono);font-size:11px;margin-top:8px">STATE OUT: articles_enriched (with og_* + image_url), errors</div>
+    </div>
+
+    <h3>④ Rank — <code>nodes/rank.py:46</code> → <code>services/scoring.py</code> + <code>services/history.py</code></h3>
+    <div class="card">
+      <div class="v"><code>filter_articles_published_today()</code> (rank.py:22): keeps only articles whose <code>published_at</code> (local TZ) == today's local date; excludes <code>None</code>. Then <code>filter_previously_delivered()</code> (history.py:57) drops URLs already recorded in <code>data/delivery-history.json</code>. Then <code>rank_articles(fresh, limit=max(limit, 40), recent_titles)</code> (scoring.py:410):</div>
+      <ul class="dotlist mono" style="font-size:12px;color:var(--muted)">
+        <li><code>cluster_articles()</code> (scoring.py:363) — greedy, newest-first, via <code>_same_story()</code></li>
+        <li><code>score_article()</code> (scoring.py:387) per member — weighted blend, novelty vs delivered titles</li>
+        <li>pick max-score representative per cluster → sort desc → keep pool of ≤40 candidates</li>
+        <li><code>score_articles_relevance()</code> (openrouter_client.py:133) — one batched LLM call; blend <code>0.7·score + 0.3·llm</code>, re-sort (skipped on dry-run / no key / failure)</li>
+        <li>cut to top <code>limit</code> (≤50)</li>
+      </ul>
+      <div class="out ok" style="font-family:var(--mono);font-size:11px;margin-top:8px">STATE OUT: articles_selected</div>
+    </div>
+
+    <h3>⑤ Summarize — <code>nodes/summarize.py:15</code> → <code>services/openrouter_client.py</code></h3>
+    <div class="card">
+      <div class="v"><code>OpenRouterClient.summarize_articles()</code> (openrouter_client.py:72) concurrent, <code>Semaphore(min(8,4))</code>.</div>
+      <ul class="dotlist mono" style="font-size:12px;color:var(--muted)">
+        <li><code>summarize_article()</code> (openrouter_client.py:85): dry-run / no key → <code>_fallback_summary()</code> template</li>
+        <li>else POST <code>/chat/completions</code>, <code>temp=0.2, max_tokens=220</code></li>
+        <li>if &lt;3 sentences → retry once with "Rewrite your answer as exactly 3 sentences."</li>
+        <li><code>enforce_sentence_count(text, 3)</code> (openrouter_client.py:51): truncate or pad</li>
+      </ul>
+      <div class="out ok" style="font-family:var(--mono);font-size:11px;margin-top:8px">STATE OUT: articles_selected (now with .summary)</div>
+    </div>
+
+    <h3>⑥ Deliver — <code>nodes/deliver.py:15</code> → <code>services/telegram_client.py</code></h3>
+    <div class="card">
+      <div class="v"><code>TelegramClient.send_articles()</code> (telegram_client.py:55) — <b>sequential</b> loop.</div>
+      <ul class="dotlist mono" style="font-size:12px;color:var(--muted)">
+        <li><code>send_article()</code> (telegram_client.py:64): dry-run → preview dict; if <code>image_url</code> → <code>sendPhoto</code> (caption ≤1024)</li>
+        <li>on sendPhoto fail → fallback <code>sendMessage</code> (text ≤4096)</li>
+        <li><code>build_telegram_caption()</code> (telegram_client.py:27): HTML-escape, <code>&lt;a href&gt;title&lt;/a&gt;</code> + summary</li>
+        <li><code>_post_with_retry()</code> (telegram_client.py:130): 3 attempts, linear backoff 1s/2s/3s; HTTP 429 → sleep <code>retry_after</code></li>
+        <li><code>record_deliveries()</code> (history.py:65): on real runs, appends articles with status <code>sent</code> to <code>data/delivery-history.json</code> (pruned to 14 days)</li>
+      </ul>
+      <div class="out ok" style="font-family:var(--mono);font-size:11px;margin-top:8px">STATE OUT: delivery_results [{status, ...}], errors · SIDE EFFECT: delivery history file</div>
+    </div>
+
+    <h3>⑦ Report — <code>main.py:55-85</code></h3>
+    <div class="card"><div class="v">Counts selected / attempted / sent / failed → prints summary → returns exit code.</div></div>
+
+    <div class="note ok"><b>Side channels:</b> LangGraphics wraps the compiled graph with <code>langgraphics.watch()</code> (workflow.py:38) when <code>LANGGRAPHICS_ENABLED=true</code> → live UI at <code>localhost:8764</code> + WS <code>8765</code>. LangSmith traces emit from each node's <code>@traceable</code> decorator to project <code>ai-news-agent</code>.</div>
+  </div>
+</section>
+
+<!-- ============ TECH STACK ============ -->
+<section id="stack">
+  <div class="wrap">
+    <h2><span class="num">04</span>Tech Stack</h2>
+    <p class="sub">All dependencies declared in <code>pyproject.toml</code>. No database, no cache, no Docker.</p>
+    <div class="scrollbox">
+    <table>
+      <thead><tr><th>Layer</th><th>Technology</th><th>Evidence</th></tr></thead>
+      <tbody>
+        <tr><td>Language</td><td><b>Python 3.11+</b></td><td class="mono">pyproject.toml:10</td></tr>
+        <tr><td>Agent framework</td><td>LangGraph (StateGraph)</td><td class="mono">pyproject.toml:12, graph/workflow.py:3</td></tr>
+        <tr><td>LLM orchestration</td><td>LangChain</td><td class="mono">pyproject.toml:13</td></tr>
+        <tr><td>LLM provider</td><td>OpenRouter — model <code>openai/gpt-oss-20b</code></td><td class="mono">config.py:11, .env.example:2</td></tr>
+        <tr><td>Observability</td><td>LangSmith</td><td class="mono">pyproject.toml:14, services/tracing.py:7</td></tr>
+        <tr><td>Live visualization</td><td>LangGraphics (git+proactive-agent/langgraphics@main)</td><td class="mono">pyproject.toml:15, graph/workflow.py:35</td></tr>
+        <tr><td>HTTP client</td><td>httpx</td><td class="mono">rss / extractor / openrouter / telegram</td></tr>
+        <tr><td>RSS parsing</td><td>feedparser</td><td class="mono">services/rss_client.py:11</td></tr>
+        <tr><td>HTML parsing</td><td>beautifulsoup4 + lxml</td><td class="mono">services/extractor.py:9</td></tr>
+        <tr><td>Config / settings</td><td>pydantic ≥2 + pydantic-settings ≥2</td><td class="mono">config.py:6</td></tr>
+        <tr><td>Env loading</td><td>python-dotenv</td><td class="mono">pyproject.toml:22</td></tr>
+        <tr><td>Source config</td><td>PyYAML</td><td class="mono">services/rss_client.py:13</td></tr>
+        <tr><td>Date parsing</td><td>python-dateutil</td><td class="mono">pyproject.toml:24</td></tr>
+        <tr><td>Delivery</td><td>Telegram Bot API (HTTP via httpx)</td><td class="mono">services/telegram_client.py:140</td></tr>
+        <tr><td>Testing</td><td>pytest + pytest-asyncio</td><td class="mono">pyproject.toml:28-29</td></tr>
+        <tr><td>Lint / Type</td><td>ruff + mypy</td><td class="mono">pyproject.toml:31-32</td></tr>
+        <tr><td>Build</td><td>setuptools ≥68</td><td class="mono">pyproject.toml:2</td></tr>
+        <tr><td>Storage</td><td><b>JSON delivery history</b> — <code>data/delivery-history.json</code>, 14-day retention; everything else in-memory</td><td class="mono">services/history.py · config.py:34-35</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============ LAYERING ============ -->
+<section id="layers">
+  <div class="wrap">
+    <h2><span class="num">05</span>Architecture Layering</h2>
+    <p class="sub">Clean separation: each layer depends only on layers below it. No import cycles (verified by graphify).</p>
+
+    <div class="layer">
+      <div class="lh"><span class="lvl">L0</span><span class="ttl">main — entry point</span><span class="desc">CLI parsing, orchestrates a single run</span></div>
+      <div class="files">
+        <span class="file"><b>src/app/main.py</b><span class="role">main() · run_pipeline() · argparse `run` subcommand</span></span>
+      </div>
+    </div>
+
+    <div class="layer">
+      <div class="lh"><span class="lvl">L1</span><span class="ttl">graph — workflow wiring</span><span class="desc">StateGraph assembly + LangGraphics wrap</span></div>
+      <div class="files">
+        <span class="file"><b>graph/workflow.py</b><span class="role">build_workflow() — 5 nodes, conditional edge after rank, compile, watch()</span></span>
+        <span class="file"><b>graph/state.py</b><span class="role">AgentState TypedDict — 11 fields</span></span>
+      </div>
+    </div>
+
+    <div class="layer">
+      <div class="lh"><span class="lvl">L2</span><span class="ttl">nodes — pipeline steps</span><span class="desc">One async function per stage; thin wrappers over services</span></div>
+      <div class="files">
+        <span class="file"><b>nodes/ingest.py</b><span class="role">ingest_node()</span></span>
+        <span class="file"><b>nodes/enrich.py</b><span class="role">enrich_node()</span></span>
+        <span class="file"><b>nodes/rank.py</b><span class="role">rank_node() · filter_articles_published_today()</span></span>
+        <span class="file"><b>nodes/summarize.py</b><span class="role">summarize_node()</span></span>
+        <span class="file"><b>nodes/deliver.py</b><span class="role">deliver_node()</span></span>
+      </div>
+    </div>
+
+    <div class="layer">
+      <div class="lh"><span class="lvl">L3</span><span class="ttl">services — business logic &amp; external clients</span><span class="desc">The workers behind the nodes</span></div>
+      <div class="files">
+        <span class="file"><b>services/rss_client.py</b><span class="role">RSSClient · normalize_url · dedupe_articles · build_article_id</span></span>
+        <span class="file"><b>services/extractor.py</b><span class="role">OpenGraphExtractor · is_domain_blocked</span></span>
+        <span class="file"><b>services/scoring.py</b><span class="role">rank_articles · cluster_articles · score_article (431 lines)</span></span>
+        <span class="file"><b>services/openrouter_client.py</b><span class="role">OpenRouterClient · enforce_sentence_count · parse_relevance_scores</span></span>
+        <span class="file"><b>services/history.py</b><span class="role">load_history · filter_previously_delivered · record_deliveries</span></span>
+        <span class="file"><b>services/telegram_client.py</b><span class="role">TelegramClient · build_telegram_caption · retry</span></span>
+        <span class="file"><b>services/tracing.py</b><span class="role">@traceable — LangSmith or no-op fallback</span></span>
+        <span class="file"><b>services/langgraphics_assets.py</b><span class="role">ensure_langgraphics_static_assets()</span></span>
+      </div>
+    </div>
+
+    <div class="layer">
+      <div class="lh"><span class="lvl">L4</span><span class="ttl">schemas · config · logging — foundation</span><span class="desc">Leaf layer: no app dependencies</span></div>
+      <div class="files">
+        <span class="file"><b>schemas/article.py</b><span class="role">Article (17 fields) · SourceConfig · FetchRules · SourcesFile — ⭐god node (32 edges)</span></span>
+        <span class="file"><b>config.py</b><span class="role">Settings (24 fields) · get_settings() lru_cache · ⭐god node</span></span>
+        <span class="file"><b>logging.py</b><span class="role">setup_logging()</span></span>
+      </div>
+    </div>
+
+    <h3>God nodes (most-depended symbols)</h3>
+    <div class="grid cards">
+      <div class="card"><div class="k">#1 — 32 edges</div><div class="v"><b>Article</b> <span class="mono">schemas/article.py:55</span><br><span class="muted">Central data model; imported by every node &amp; every service</span></div></div>
+      <div class="card"><div class="k">#2</div><div class="v"><b>Settings</b> <span class="mono">config.py:9</span><br><span class="muted">All 5 nodes + 4 HTTP services</span></div></div>
+      <div class="card"><div class="k">#3</div><div class="v"><b>AgentState</b> <span class="mono">graph/state.py:6</span><br><span class="muted">All 5 nodes + workflow + main</span></div></div>
+      <div class="card"><div class="k">#4</div><div class="v"><b>traceable</b> <span class="mono">services/tracing.py:16</span><br><span class="muted">All 5 nodes</span></div></div>
+      <div class="card"><div class="k">#5</div><div class="v"><b>normalize_url</b> <span class="mono">rss_client.py:34</span><br><span class="muted">Only cross-service import (extractor→rss_client)</span></div></div>
+    </div>
+    <div class="note"><b>Notable:</b> <code>extractor.py</code> → <code>rss_client.normalize_url</code> is the <i>only</i> service-to-service dependency besides via schemas/config. The rest stay cleanly layered.</div>
+  </div>
+</section>
+
+<!-- ============ INTEGRATIONS ============ -->
+<section id="integrations">
+  <div class="wrap">
+    <h2><span class="num">06</span>External Integrations</h2>
+    <p class="sub">No database, no email, no Slack, no vector store, no MCP servers. Just four external touchpoints.</p>
+    <div class="grid cards" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
+
+      <div class="int" style="--c:var(--ingest)">
+        <div class="h"><div class="ic">📡</div><div><div class="nm">RSS feeds (30 sources)</div><div class="type">data source · HTTP GET</div></div></div>
+        <div class="body">Pulls AI news from ~30 feeds: TLDR AI, TechCrunch, The Verge, Wired, MIT Tech Review, VentureBeat, ZDNet, OpenAI/DeepMind/BAIR/NVIDIA/AWS/Apple blogs, arXiv cs.AI, Hugging Face, Reddit r/ML + r/artificial, Hacker News, LessWrong, Kaggle…</div>
+        <span class="ref">services/rss_client.py:131 fetch_source() · data/news-sources.yaml</span>
+      </div>
+
+      <div class="int" style="--c:var(--summarize)">
+        <div class="h"><div class="ic">✨</div><div><div class="nm">OpenRouter</div><div class="type">LLM API · chat completions</div></div></div>
+        <div class="body">3-sentence summarization + one batched relevance-scoring call per run. OpenAI-compatible <code>POST /chat/completions</code>, model <code>openai/gpt-oss-20b</code>, Bearer auth, <code>HTTP-Referer</code> + <code>X-Title</code> headers.</div>
+        <span class="ref">services/openrouter_client.py:191 _request_summary() · :133 score_articles_relevance()</span>
+      </div>
+
+      <div class="int" style="--c:var(--deliver)">
+        <div class="h"><div class="ic">✈️</div><div><div class="nm">Telegram Bot API</div><div class="type">delivery · HTTP POST</div></div></div>
+        <div class="body"><code>sendPhoto</code> (with image, caption ≤1024) or <code>sendMessage</code> fallback (text ≤4096). Retry: 3 attempts linear backoff; HTTP 429 → sleep <code>retry_after</code>.</div>
+        <span class="ref">services/telegram_client.py:140 _post_with_retry()</span>
+      </div>
+
+      <div class="int" style="--c:var(--purple)">
+        <div class="h"><div class="ic">🔍</div><div><div class="nm">LangSmith</div><div class="type">observability · tracing</div></div></div>
+        <div class="body"><code>@traceable</code> decorator on all 5 nodes emits traces to project <code>ai-news-agent</code>. Optional — falls back to no-op if not installed.</div>
+        <span class="ref">services/tracing.py:7 · config.py:64 configure_langsmith_env()</span>
+      </div>
+
+      <div class="int" style="--c:var(--acc2)">
+        <div class="h"><div class="ic">📊</div><div><div class="nm">LangGraphics</div><div class="type">live visualization · local HTTP/WS</div></div></div>
+        <div class="body"><code>langgraphics.watch(compiled)</code> starts UI at <code>localhost:8764</code> + WS <code>8765</code>, visualizes graph execution live during the run.</div>
+        <span class="ref">graph/workflow.py:35-48 · services/langgraphics_assets.py</span>
+      </div>
+
+      <div class="int" style="--c:var(--amber)">
+        <div class="h"><div class="ic">🌐</div><div><div class="nm">Article URLs (OpenGraph)</div><div class="type">data enrichment · HTTP GET</div></div></div>
+        <div class="body">Fetches each article's HTML to extract <code>og:title</code> / <code>og:description</code> / <code>og:image</code>, with blocked-domain + RSS image fallback.</div>
+        <span class="ref">services/extractor.py:91 _enrich_one()</span>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ============ SCORING ============ -->
+<section id="scoring">
+  <div class="wrap">
+    <h2><span class="num">07</span>Ranking &amp; Clustering</h2>
+    <p class="sub">Deterministic keyword/phrase base score in <code>services/scoring.py</code>, optionally blended with <b>one batched LLM relevance call</b> over the top-40 pool (<code>nodes/rank.py:18-19</code>: <code>0.7·score + 0.3·llm</code>; skipped on dry-run, missing key, or any failure).</p>
+
+    <h3>Base score formula</h3>
+    <div class="formula">
+<span class="cm"># score_article(article, cluster_size, recent_titles)  — scoring.py:387</span>
+score = <span class="w">0.38</span>·<span class="c">relevance</span>
+      + <span class="w">0.24</span>·<span class="c">recency</span>
+      + <span class="w">0.14</span>·<span class="c">source_weight</span>
+      + <span class="w">0.10</span>·<span class="c">duplication</span>
+      + <span class="w">0.09</span>·<span class="c">cluster</span>
+      + <span class="w">0.05</span>·<span class="c">novelty</span>
+    </div>
+
+    <div class="grid cards" style="margin-top:14px">
+      <div class="card"><div class="k">relevance (0.38)</div><div class="v">Tokenize title+summary; sum boosts across 5 keyword categories (product launch, tech dev, startup funding, enterprise adoption, deals). High-phrase hits +0.07 (max 2); low-priority penalty 0.08–0.22. Clamped 0–1.</div></div>
+      <div class="card"><div class="k">recency (0.24)</div><div class="v">≤6h=1.0 · ≤24h=0.8 · ≤48h=0.6 · ≤96h=0.4 · else=0.2 · None=0.3</div></div>
+      <div class="card"><div class="k">source_weight (0.14)</div><div class="v">11 hardcoded reputations: OpenAI/DeepMind/Anthropic/Meta = <b>1.0</b> → ZDNet = 0.80; default 0.70</div></div>
+      <div class="card"><div class="k">duplication (0.10)</div><div class="v">Boosted by <code>duplicate_count</code> (same URL across feeds, within one run)</div></div>
+      <div class="card"><div class="k">cluster (0.09)</div><div class="v">Boosted by <code>cluster_size</code> (same-story grouping across sources)</div></div>
+      <div class="card"><div class="k">novelty (0.05)</div><div class="v"><code>1 − max title similarity</code> vs stories delivered in the last 14 days (<code>data/delivery-history.json</code>); 1.0 when no history</div></div>
+    </div>
+
+    <h3>Same-story clustering — <code>_same_story()</code> scoring.py:340</h3>
+    <div class="card">
+      <div class="v">Similarity = <code>0.65·Jaccard + 0.35·SequenceMatcher</code> on title tokens.</div>
+      <ul class="dotlist mono" style="font-size:12px;color:var(--muted)">
+        <li><span class="pl">strong:</span> similarity ≥ 0.78 AND token overlap ≥ 0.5</li>
+        <li><span class="pl">moderate:</span> similarity ≥ 0.62 AND overlap ≥ 0.7 AND time-aligned (≤120h apart)</li>
+      </ul>
+      <div class="v" style="margin-top:8px"><code>cluster_articles()</code> (scoring.py:363): sort newest-first, greedily assign to first matching cluster. Then <b>one representative (max score) per cluster</b> is selected — duplicate coverage collapses to a single story.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ LLM ============ -->
+<section id="llm">
+  <div class="wrap">
+    <h2><span class="num">08</span>LLM Usage — Summarization + Batched Re-rank</h2>
+    <p class="sub">Two AI use cases, both via OpenRouter: 3-sentence summaries per story, and one batched relevance-scoring call during ranking. No embeddings, no agentic orchestration.</p>
+    <div class="grid cards" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
+      <div class="card"><div class="k">Model</div><div class="v"><code>openai/gpt-oss-20b</code></div></div>
+      <div class="card"><div class="k">File</div><div class="v"><code>services/openrouter_client.py</code></div></div>
+      <div class="card"><div class="k">Parameters</div><div class="v"><code>temperature=0.2</code><br><code>max_tokens=220</code></div></div>
+      <div class="card"><div class="k">Concurrency</div><div class="v"><code>Semaphore(min(8,4))</code> — max 4 parallel</div></div>
+    </div>
+
+    <h3>System prompt</h3>
+    <div class="formula">"You summarize AI news for a Telegram digest. Return exactly 3 concise sentences."</div>
+
+    <h3>User prompt — <code>_build_prompt()</code> openrouter_client.py:128</h3>
+    <div class="formula">
+Title:    &lt;effective_title&gt;
+Source:   &lt;source_name&gt;
+Published: &lt;UTC ISO&gt;
+URL:      &lt;url&gt;
+Context:  &lt;effective_summary_source&gt;
+
+Write exactly 3 sentences focused on key facts and why this matters.
+    </div>
+
+    <h3>Robustness</h3>
+    <div class="grid cards">
+      <div class="card"><div class="k">Retry</div><div class="v">If response &lt;3 sentences → append "Rewrite your answer as exactly 3 sentences." and call once more (openrouter_client.py:100-108).</div></div>
+      <div class="card"><div class="k">Post-process</div><div class="v"><code>enforce_sentence_count(text, 3)</code> truncates to exactly 3 or pads with fallback sentences.</div></div>
+      <div class="card"><div class="k">Fallback (no LLM)</div><div class="v">When <code>dry_run=true</code> or no <code>OPENROUTER_API_KEY</code> → <code>_fallback_summary()</code> deterministic template. API exceptions also fall back here.</div></div>
+    </div>
+
+    <h3>Relevance re-rank — <code>score_articles_relevance()</code> openrouter_client.py:133</h3>
+    <div class="grid cards">
+      <div class="card"><div class="k">Call shape</div><div class="v">One <code>POST /chat/completions</code> per run: numbered list of ≤40 titles + trimmed context, <code>temperature=0</code>. Asks for a JSON object of 0–100 scores.</div></div>
+      <div class="card"><div class="k">Parsing</div><div class="v"><code>parse_relevance_scores()</code> (openrouter_client.py:20): extracts the first JSON object, drops unknown/malformed keys, normalizes to 0–1.</div></div>
+      <div class="card"><div class="k">Blend</div><div class="v"><code>rank_node</code> re-scores candidates as <code>0.7·base + 0.3·llm</code>, re-sorts, cuts to limit (nodes/rank.py:73-90).</div></div>
+      <div class="card"><div class="k">Fail-safe</div><div class="v">Dry-run, missing key, HTTP error, or unparseable output → empty result → deterministic order stands. The pipeline never fails because of this call.</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ AGENTSTATE ============ -->
+<section id="state">
+  <div class="wrap">
+    <h2><span class="num">09</span>AgentState — the shared run state</h2>
+    <p class="sub"><code>AgentState(TypedDict, total=False)</code> in <code>graph/state.py:6</code>. 11 optional fields; lives only for the duration of one <code>workflow.ainvoke()</code>. The only cross-run persistence is the delivery history file written by <code>deliver</code>.</p>
+    <div class="scrollbox">
+    <table>
+      <thead><tr><th>Field</th><th>Set by</th><th>Contents</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">run_id</td><td>main</td><td>unique run identifier</td></tr>
+        <tr><td class="mono">started_at</td><td>main</td><td>run start timestamp</td></tr>
+        <tr><td class="mono">dry_run</td><td>main</td><td>skip real API calls flag</td></tr>
+        <tr><td class="mono">limit</td><td>main</td><td>max articles to deliver (clamped 1–50)</td></tr>
+        <tr><td class="mono">fetch_defaults</td><td>ingest</td><td>FetchRules from YAML</td></tr>
+        <tr><td class="mono">sources</td><td>ingest</td><td>list[SourceConfig]</td></tr>
+        <tr><td class="mono">articles_raw</td><td>ingest</td><td>deduped Article list from RSS</td></tr>
+        <tr><td class="mono">articles_enriched</td><td>enrich</td><td>articles + og_* + image_url</td></tr>
+        <tr><td class="mono">articles_selected</td><td>rank → summarize</td><td>today's fresh articles, scored &amp; selected (≤50); summaries added by summarize</td></tr>
+        <tr><td class="mono">delivery_results</td><td>deliver</td><td>[{status: sent|error|dry_run, ...}]</td></tr>
+        <tr><td class="mono">errors</td><td>all nodes</td><td>accumulated non-fatal errors</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <div class="note ok"><b>Article model</b> (<code>schemas/article.py:55</code>) has 17 fields incl. <code>id, source_name, title, url, published_at, og_title, og_description, image_url, summary, score, duplicate_count, cluster_id, cluster_size</code>. Properties: <code>effective_title</code> (og_title or title), <code>effective_summary_source</code> (og_description or description).</div>
+  </div>
+</section>
+
+<!-- ============ CONFIG ============ -->
+<section id="config">
+  <div class="wrap">
+    <h2><span class="num">10</span>Configuration</h2>
+    <p class="sub"><code>pydantic-settings</code> <code>BaseSettings</code> loading from <code>.env</code> (<code>config.py:40-45</code>), memoized via <code>@lru_cache</code> (<code>config.py:59</code>). <code>missing_required_runtime_fields(dry_run)</code> only enforces Telegram creds when not dry-run.</p>
+    <div class="scrollbox">
+    <table>
+      <thead><tr><th>Variable</th><th>Default</th><th>Required?</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">OPENROUTER_API_KEY</td><td>—</td><td><span class="req">for LLM</span></td><td>OpenRouter auth (else template fallback)</td></tr>
+        <tr><td class="mono">OPENROUTER_MODEL</td><td class="mono">openai/gpt-oss-20b</td><td><span class="opt">no</span></td><td>LLM model</td></tr>
+        <tr><td class="mono">OPENROUTER_BASE_URL</td><td class="mono">https://openrouter.ai/api/v1</td><td><span class="opt">no</span></td><td>API endpoint</td></tr>
+        <tr><td class="mono">OPENROUTER_SITE_URL</td><td>—</td><td><span class="opt">no</span></td><td><code>HTTP-Referer</code> header</td></tr>
+        <tr><td class="mono">OPENROUTER_APP_NAME</td><td>AI News Agent</td><td><span class="opt">no</span></td><td><code>X-Title</code> header</td></tr>
+        <tr><td class="mono">TELEGRAM_BOT_TOKEN</td><td>—</td><td><span class="req">for real runs</span></td><td>Bot auth</td></tr>
+        <tr><td class="mono">TELEGRAM_CHAT_ID</td><td>—</td><td><span class="req">for real runs</span></td><td>Target chat</td></tr>
+        <tr><td class="mono">TELEGRAM_PARSE_MODE</td><td>HTML</td><td><span class="opt">no</span></td><td>Telegram parse mode</td></tr>
+        <tr><td class="mono">LANGSMITH_API_KEY</td><td>—</td><td><span class="opt">recommended</span></td><td>Observability</td></tr>
+        <tr><td class="mono">LANGSMITH_PROJECT</td><td>ai-news-agent</td><td><span class="opt">no</span></td><td>Trace project</td></tr>
+        <tr><td class="mono">LANGSMITH_TRACING</td><td>true</td><td><span class="opt">no</span></td><td>Enable tracing</td></tr>
+        <tr><td class="mono">LANGGRAPHICS_ENABLED</td><td>true</td><td><span class="opt">no</span></td><td>Live graph UI</td></tr>
+        <tr><td class="mono">LANGGRAPHICS_OPEN_BROWSER</td><td>true</td><td><span class="opt">no</span></td><td>Auto-open browser</td></tr>
+        <tr><td class="mono">LANGGRAPHICS_HOST/PORT/WS_PORT</td><td class="mono">localhost/8764/8765</td><td><span class="opt">no</span></td><td>UI bind</td></tr>
+        <tr><td class="mono">SOURCES_FILE</td><td class="mono">data/news-sources.yaml</td><td><span class="opt">no</span></td><td>RSS source config path</td></tr>
+        <tr><td class="mono">HISTORY_FILE</td><td class="mono">data/delivery-history.json</td><td><span class="opt">no</span></td><td>Delivery history store (cross-run dedup + novelty)</td></tr>
+        <tr><td class="mono">HISTORY_RETENTION_DAYS</td><td>14</td><td><span class="opt">no</span></td><td>How long delivered stories stay in history</td></tr>
+        <tr><td class="mono">REQUEST_TIMEOUT_SECONDS</td><td>20</td><td><span class="opt">no</span></td><td>HTTP timeout</td></tr>
+        <tr><td class="mono">HTTP_CONCURRENCY</td><td>8</td><td><span class="opt">no</span></td><td>Parallel HTTP requests</td></tr>
+        <tr><td class="mono">MAX_FEED_ITEMS_PER_SOURCE</td><td>50</td><td><span class="opt">no</span></td><td>RSS items per feed</td></tr>
+        <tr><td class="mono">MAX_ARTICLES_PER_RUN</td><td>50</td><td><span class="opt">no</span></td><td>Max articles delivered</td></tr>
+        <tr><td class="mono">USER_AGENT</td><td class="mono">AINewsAgent/0.1</td><td><span class="opt">no</span></td><td>HTTP User-Agent</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============ OPS ============ -->
+<section id="ops">
+  <div class="wrap">
+    <h2><span class="num">11</span>Operations</h2>
+    <p class="sub">How to run it, what's automated, and what isn't.</p>
+
+    <h3>Run commands</h3>
+    <div class="formula">
+<span class="cm"># standard run (real Telegram delivery)</span>
+PYTHONPATH=src python -m app.main run
+
+<span class="cm"># dry-run (no API calls — preview only)</span>
+PYTHONPATH=src python -m app.main run <span class="pl">--dry-run</span>
+
+<span class="cm"># limit to N stories (clamped 1–50)</span>
+PYTHONPATH=src python -m app.main run <span class="pl">--limit</span> 10
+
+<span class="cm"># verbose logging</span>
+PYTHONPATH=src python -m app.main run <span class="pl">--verbose</span>
+
+<span class="cm"># console-script alias (if installed)</span>
+ai-news-agent run
+    </div>
+
+    <h3>Scheduling / automation</h3>
+    <div class="note"><b>No scheduler for the pipeline.</b> The news agent is <b>manual CLI-triggered only</b> (<code>build_plan/build plan.md:18</code>). The only cron in the repo is <code>.github/workflows/openwiki-update.yml</code> — daily 08:00 UTC — which <b>only refreshes the OpenWiki documentation</b> via <code>openwiki code --update</code>. It does <i>not</i> run the news pipeline. To automate the digest, add your own cron/launchd/GitHub Action calling the run command above.</div>
+
+    <h3>Testing</h3>
+    <div class="grid cards">
+      <div class="card"><div class="k">Framework</div><div class="v">pytest + pytest-asyncio (24 tests, all sync, no mocking)</div></div>
+      <div class="card"><div class="k">test_rank.py</div><div class="v">9 tests — ranking, clustering, date filter, relevance priority, novelty penalty</div></div>
+      <div class="card"><div class="k">test_history.py</div><div class="v">5 tests — record/load round-trip, retention pruning, corrupt file, delivered-URL filter</div></div>
+      <div class="card"><div class="k">test_summarize.py</div><div class="v">4 tests — enforce_sentence_count, parse_relevance_scores</div></div>
+      <div class="card"><div class="k">test_workflow.py</div><div class="v">2 tests — route_after_rank early-exit routing</div></div>
+      <div class="card"><div class="k">test_ingest.py</div><div class="v">2 tests — normalize_url, dedupe_articles</div></div>
+      <div class="card"><div class="k">test_enrich.py + test_telegram_format.py</div><div class="v">1 test each — extract_open_graph_fields, build_telegram_caption</div></div>
+    </div>
+    <div class="note ok"><b>Docs fidelity:</b> README + openwiki are highly accurate and match the code. Minor nuance: <code>openwiki/quickstart.md</code> says "20+ sources" but there are actually <b>30</b> in <code>data/news-sources.yaml</code>.</div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Generated from a full read of the repository by the <b>repo-explorer</b> agent.</span>
+    <span class="mono">architecture/ai-news.html</span>
+  </div>
+</footer>
+
+</body>
+</html>

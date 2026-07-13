@@ -5,6 +5,7 @@ import logging
 from app.config import get_settings
 from app.graph.state import AgentState
 from app.schemas.article import parse_articles
+from app.services.history import record_deliveries
 from app.services.telegram_client import TelegramClient
 from app.services.tracing import traceable
 
@@ -16,9 +17,17 @@ async def deliver_node(state: AgentState) -> AgentState:
     settings = get_settings()
     dry_run = bool(state.get("dry_run", False))
 
-    articles = parse_articles(state.get("articles_top20"))
+    articles = parse_articles(state.get("articles_selected"))
     telegram_client = TelegramClient(settings)
     results = await telegram_client.send_articles(articles, dry_run=dry_run)
+
+    if not dry_run:
+        record_deliveries(
+            settings.history_file,
+            articles,
+            results,
+            settings.history_retention_days,
+        )
 
     next_state: AgentState = dict(state)
     next_state["delivery_results"] = results

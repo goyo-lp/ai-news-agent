@@ -119,6 +119,29 @@ def test_rank_articles_uses_description_for_relevance_signals() -> None:
     assert ranked[0].id == "deal"
 
 
+def test_rank_articles_penalizes_recently_delivered_titles() -> None:
+    repeat = _article(
+        "repeat",
+        "Unknown",
+        2,
+        title="OpenAI launches new multimodal model for developers",
+    )
+    fresh = _article(
+        "fresh",
+        "Unknown",
+        2,
+        title="NVIDIA unveils next generation AI accelerator chips",
+    )
+    recent_titles = ["OpenAI launches new multimodal model for developers"]
+
+    ranked = rank_articles([repeat, fresh], limit=20, recent_titles=recent_titles)
+    baseline = rank_articles([repeat, fresh], limit=20)
+
+    repeat_with_history = next(item for item in ranked if item.id == "repeat")
+    repeat_baseline = next(item for item in baseline if item.id == "repeat")
+    assert (repeat_with_history.score or 0.0) < (repeat_baseline.score or 0.0)
+
+
 def test_filter_articles_published_today_keeps_same_day() -> None:
     now = datetime(2026, 3, 2, 12, 0, tzinfo=timezone.utc)
     today = _dated_article("today", datetime(2026, 3, 2, 1, 0, tzinfo=timezone.utc))

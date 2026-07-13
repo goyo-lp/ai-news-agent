@@ -302,13 +302,6 @@ def _recency_score(published_at: datetime | None) -> float:
     return 0.2
 
 
-def _novelty_score(article: Article) -> float:
-    title_tokens = set(article.effective_title.lower().split())
-    if not title_tokens:
-        return 0.0
-    return min(len(title_tokens) / 20.0, 1.0)
-
-
 def _title_similarity(left: str, right: str) -> float:
     left_norm = _normalize_text(left)
     right_norm = _normalize_text(right)
@@ -325,6 +318,16 @@ def _title_similarity(left: str, right: str) -> float:
     sequence = SequenceMatcher(None, left_norm, right_norm).ratio()
 
     return (0.65 * jaccard) + (0.35 * sequence)
+
+
+def _novelty_score(article: Article, recent_titles: list[str] | None) -> float:
+    """1.0 = unseen story; approaches 0.0 as the title matches recently delivered ones."""
+    if not recent_titles:
+        return 1.0
+    max_similarity = max(
+        _title_similarity(article.effective_title, title) for title in recent_titles
+    )
+    return max(0.0, 1.0 - max_similarity)
 
 
 def _is_time_aligned(left: datetime | None, right: datetime | None, max_hours: int = 120) -> bool:
@@ -381,13 +384,17 @@ def cluster_articles(articles: list[Article]) -> list[StoryCluster]:
     return clusters
 
 
-def score_article(article: Article, cluster_size: int = 1) -> float:
+def score_article(
+    article: Article,
+    cluster_size: int = 1,
+    recent_titles: list[str] | None = None,
+) -> float:
     relevance = _relevance_score(article)
     recency = _recency_score(article.published_at)
     source_weight = _source_weight(article.source_name)
     duplication_signal = min(article.duplicate_count / 5.0, 1.0)
     cluster_signal = min(max(cluster_size, 1) / 5.0, 1.0)
-    novelty = _novelty_score(article)
+    novelty = _novelty_score(article, recent_titles)
 
     score = (
         0.38 * relevance
@@ -400,7 +407,11 @@ def score_article(article: Article, cluster_size: int = 1) -> float:
     return round(score, 5)
 
 
-def rank_articles(articles: list[Article], limit: int) -> list[Article]:
+def rank_articles(
+    articles: list[Article],
+    limit: int,
+    recent_titles: list[str] | None = None,
+) -> list[Article]:
     candidates = [article.model_copy(deep=True) for article in articles]
     story_clusters = cluster_articles(candidates)
 
@@ -410,7 +421,11 @@ def rank_articles(articles: list[Article], limit: int) -> list[Article]:
         for member in cluster.members:
             member.cluster_id = cluster.id
             member.cluster_size = cluster_size
-            member.score = score_article(member, cluster_size=cluster_size)
+            member.score = score_article(
+                member,
+                cluster_size=cluster_size,
+                recent_titles=recent_titles,
+            )
 
         representative = max(
             cluster.members,
