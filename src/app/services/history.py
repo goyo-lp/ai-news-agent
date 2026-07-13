@@ -57,8 +57,37 @@ def delivered_titles(history: list[dict[str, Any]]) -> list[str]:
 def filter_previously_delivered(
     articles: list[Article],
     history: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
 ) -> list[Article]:
-    seen = delivered_urls(history)
+    """Drop articles whose URL was delivered on a prior day.
+
+    Articles delivered earlier *today* are kept so same-day testing / re-runs
+    don't starve the digest. Only deliveries from previous days count as
+    "previously delivered". Timezone for "today" follows `now` (defaults to
+    local now, matching the rank node's today filter).
+    """
+    if not history:
+        return articles
+
+    reference_now = now if now is not None else datetime.now().astimezone()
+    if reference_now.tzinfo is None:
+        reference_now = reference_now.replace(tzinfo=timezone.utc)
+    today = reference_now.astimezone().date()
+
+    seen: set[str] = set()
+    for entry in history:
+        url = entry.get("url")
+        if not url:
+            continue
+        try:
+            delivered_at = datetime.fromisoformat(entry["delivered_at"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if delivered_at.tzinfo is None:
+            delivered_at = delivered_at.replace(tzinfo=timezone.utc)
+        if delivered_at.astimezone(reference_now.tzinfo).date() < today:
+            seen.add(url)
     return [article for article in articles if article.url not in seen]
 
 

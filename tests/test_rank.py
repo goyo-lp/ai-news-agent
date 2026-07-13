@@ -143,9 +143,58 @@ def test_rank_articles_caps_items_per_source() -> None:
     per_source: dict[str, int] = {}
     for item in ranked:
         per_source[item.source_name] = per_source.get(item.source_name, 0) + 1
-    assert per_source["arXiv.org (cs.AI)"] == 3
+    # Pass 1 takes the top 3 arXiv + the TechCrunch article = 4.
+    # Pass 2 backfills the remaining 7 arXiv articles (10 total), reaching the
+    # pool size of 11 rather than the old strict-cap total of 4.
+    assert per_source["arXiv.org (cs.AI)"] == 10
     assert per_source["TechCrunch (AI)"] == 1
-    assert len(ranked) == 4
+    assert len(ranked) == 11
+
+
+def test_rank_articles_backfill_respects_limit() -> None:
+    flood = [
+        _article(f"arxiv{idx}", "arXiv.org (cs.AI)", 1, title=f"Story {idx}")
+        for idx in range(10)
+    ]
+
+    # limit=5 with cap=3 => pass 1 picks 3, pass 2 backfills 2 with penalty.
+    ranked = rank_articles(flood, limit=5, max_per_source=3)
+    assert len(ranked) == 5
+    counts: dict[str, int] = {}
+    for item in ranked:
+        counts[item.source_name] = counts.get(item.source_name, 0) + 1
+    assert counts["arXiv.org (cs.AI)"] == 5
+
+
+def test_rank_articles_backfill_orders_by_penalized_score() -> None:
+    backfill_before = _article(
+        "high",
+        "arXiv.org (cs.AI)",
+        1,
+        title="Major frontier AI release with novel reasoning capabilities",
+    )
+    backfill_after = _article(
+        "low",
+        "arXiv.org (cs.AI)",
+        1,
+        title="A routine workshop call for papers deadline reminder",
+    )
+    other_source = _article(
+        "other",
+        "TechCrunch (AI)",
+        1,
+        title="OpenAI announces new enterprise tier pricing",
+    )
+
+    ranked = rank_articles([backfill_before, backfill_after, other_source], limit=5, max_per_source=1)
+
+    # Pass 1 picks one arXiv (the higher-scoring one) and TechCrunch = 2.
+    # Pass 2 backfills the second arXiv article. Higher scorer is pulled before lower.
+    ids = [item.id for item in ranked]
+    assert "high" in ids
+    assert "low" in ids
+    assert "other" in ids
+    assert len(ranked) == 3
 
 
 def test_rank_articles_boosts_frontier_company_mentions() -> None:

@@ -63,7 +63,7 @@ async def rank_node(state: AgentState) -> AgentState:
         )
 
     history = load_history(settings.history_file, settings.history_retention_days)
-    fresh_articles = filter_previously_delivered(todays_articles, history)
+    fresh_articles = filter_previously_delivered(todays_articles, history, now=local_now)
     dropped_count = len(todays_articles) - len(fresh_articles)
     if dropped_count:
         logger.info("History filter dropped %s previously delivered items", dropped_count)

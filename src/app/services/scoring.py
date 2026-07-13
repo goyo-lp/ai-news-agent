@@ -449,6 +449,7 @@ def rank_articles(
     limit: int,
     recent_titles: list[str] | None = None,
     max_per_source: int | None = None,
+    backfill_penalty: float = 0.05,
 ) -> list[Article]:
     candidates = [article.model_copy(deep=True) for article in articles]
     story_clusters = cluster_articles(candidates)
@@ -485,15 +486,46 @@ def rank_articles(
     if max_per_source is None:
         return representatives[:limit]
 
-    # One prolific feed (e.g. arXiv's daily batch) must not fill every slot.
-    # No backfill past the cap: a quiet day yields a shorter digest.
+    # Pass 1: strict per-source cap. Picks the highest-scoring representatives
+    # up to `max_per_source` per source, in score-descending order.
     selected: list[Article] = []
     per_source: dict[str, int] = {}
+    passed_over: list[Article] = []
     for article in representatives:
         if per_source.get(article.source_name, 0) >= max_per_source:
+            passed_over.append(article)
             continue
         selected.append(article)
         per_source[article.source_name] = per_source.get(article.source_name, 0) + 1
         if len(selected) >= limit:
-            break
+            return selected
+
+    # Pass 2: if we haven't reached the limit and have articles passed over
+    # their source's cap, backfill with a per-extra penalty on the score.
+    # Each extra same-source article beyond the cap penalizes by `backfill_penalty`
+    # (the (cap+1)th article loses 1*penalty, the (cap+2)th loses 2*penalty, ...).
+    # This keeps single-source floods from dominating yet lets a quiet day reach
+    # the configured `limit` instead of returning a shortened digest.
+    if len(selected) < limit and passed_over:
+        extras_per_source: dict[str, int] = {}
+        candidates_pool: list[tuple[float, datetime, Article]] = []
+        for article in passed_over:
+            backfill_count = extras_per_source.get(article.source_name, 0)
+            penalty = backfill_penalty * (backfill_count + 1)
+            penalized_score = (article.score or 0.0) - penalty
+            candidates_pool.append(
+                (
+                    penalized_score,
+                    article.published_at or datetime.min.replace(tzinfo=timezone.utc),
+                    article,
+                )
+            )
+            extras_per_source[article.source_name] = backfill_count + 1
+
+        candidates_pool.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        for _, _, article in candidates_pool:
+            selected.append(article)
+            if len(selected) >= limit:
+                break
+
     return selected

@@ -69,14 +69,42 @@ def test_load_history_missing_or_corrupt_file(tmp_path: Path) -> None:
 def test_filter_previously_delivered_drops_known_urls(tmp_path: Path) -> None:
     delivered = _article("a1", "https://example.com/a1", "Seen story")
     fresh = _article("a2", "https://example.com/a2", "New story")
+    now = datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc)
     history = [
         {
             "url": "https://example.com/a1",
             "title": "Seen story",
-            "delivered_at": datetime.now(timezone.utc).isoformat(),
+            "delivered_at": (now - timedelta(days=1)).isoformat(),
         }
     ]
 
-    filtered = filter_previously_delivered([delivered, fresh], history)
+    filtered = filter_previously_delivered([delivered, fresh], history, now=now)
 
     assert [article.id for article in filtered] == ["a2"]
+
+
+def test_filter_previously_delivered_keeps_same_day_deliveries(tmp_path: Path) -> None:
+    """Same-day runs shouldn't starve the digest: only prior-day deliveries drop."""
+    delivered_today = _article("a1", "https://example.com/a1", "Seen earlier today")
+    fresh = _article("a2", "https://example.com/a2", "New story")
+    now = datetime(2026, 7, 13, 18, 0, tzinfo=timezone.utc)
+    history = [
+        {
+            "url": "https://example.com/a1",
+            "title": "Seen earlier today",
+            "delivered_at": datetime(2026, 7, 13, 8, 0, tzinfo=timezone.utc).isoformat(),
+        }
+    ]
+
+    filtered = filter_previously_delivered([delivered_today, fresh], history, now=now)
+
+    # Both pass: same-day deliveries are exempt.
+    assert [article.id for article in filtered] == ["a1", "a2"]
+
+
+def test_filter_previously_delivered_empty_history_keeps_all(tmp_path: Path) -> None:
+    a1 = _article("a1", "https://example.com/a1", "Story A")
+    a2 = _article("a2", "https://example.com/a2", "Story B")
+    now = datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc)
+
+    assert filter_previously_delivered([a1, a2], [], now=now) == [a1, a2]
