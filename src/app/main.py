@@ -9,7 +9,7 @@ from uuid import uuid4
 from app.config import configure_langsmith_env, get_settings
 from app.graph.state import AgentState
 from app.graph.workflow import build_workflow
-from app.logging import setup_logging
+from app.logging_setup import setup_logging
 
 logger = logging.getLogger(__name__)
 

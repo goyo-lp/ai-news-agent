@@ -1,5 +1,3 @@
-import asyncio
-
 from app.services.middleware import (
     MiddlewareChain,
     reasoning_effort_middleware,
@@ -34,11 +32,7 @@ def test_strip_think_blocks_passes_through_clean_text() -> None:
     assert strip_think_blocks(clean) == clean
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
-
-
-def test_reasoning_effort_middleware_injects_effort() -> None:
+async def test_reasoning_effort_middleware_injects_effort() -> None:
     captured = {}
 
     async def base_call(payload):
@@ -46,12 +40,12 @@ def test_reasoning_effort_middleware_injects_effort() -> None:
         return "ok"
 
     chain = MiddlewareChain([reasoning_effort_middleware(effort="high")])
-    out = _run(chain.execute(base_call, {"messages": []}))
+    out = await chain.execute(base_call, {"messages": []})
     assert out == "ok"
     assert captured["reasoning"] == {"effort": "high"}
 
 
-def test_reasoning_effort_middleware_omits_field_when_none() -> None:
+async def test_reasoning_effort_middleware_omits_field_when_none() -> None:
     captured = {}
 
     async def base_call(payload):
@@ -59,21 +53,21 @@ def test_reasoning_effort_middleware_omits_field_when_none() -> None:
         return "ok"
 
     chain = MiddlewareChain([reasoning_effort_middleware(effort=None)])
-    _run(chain.execute(base_call, {"messages": []}))
+    await chain.execute(base_call, {"messages": []})
     assert "reasoning" not in captured
 
 
-def test_strip_reasoning_middleware_strips_response() -> None:
-    async def base_call(payload):
+async def test_strip_reasoning_middleware_strips_response() -> None:
+    async def base_call(_payload):
         return _leak()
 
     chain = MiddlewareChain([strip_reasoning_middleware])
-    out = _run(chain.execute(base_call, {"messages": []}))
+    out = await chain.execute(base_call, {"messages": []})
     assert OPEN not in out
     assert out.startswith("Final.")
 
 
-def test_chain_runs_before_in_order_then_after_in_reverse() -> None:
+async def test_chain_runs_before_in_order_then_after_in_reverse() -> None:
     order = []
 
     async def mw_a(payload, call_next):
@@ -88,16 +82,16 @@ def test_chain_runs_before_in_order_then_after_in_reverse() -> None:
         order.append("b-after")
         return r
 
-    async def base_call(payload):
+    async def base_call(_payload):
         order.append("call")
         return "ok"
 
     chain = MiddlewareChain([mw_a, mw_b])
-    _run(chain.execute(base_call, {}))
+    await chain.execute(base_call, {})
     assert order == ["a-before", "b-before", "call", "b-after", "a-after"]
 
 
-def test_chain_combines_effort_and_strip() -> None:
+async def test_chain_combines_effort_and_strip() -> None:
     captured = {}
 
     async def base_call(payload):
@@ -108,7 +102,7 @@ def test_chain_combines_effort_and_strip() -> None:
         reasoning_effort_middleware(effort="high"),
         strip_reasoning_middleware,
     ])
-    out = _run(chain.execute(base_call, {"messages": []}))
+    out = await chain.execute(base_call, {"messages": []})
     assert captured["reasoning"] == {"effort": "high"}
     assert OPEN not in out
     assert out.startswith("Final.")

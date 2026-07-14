@@ -1,6 +1,6 @@
 # AI News Agent
 
-LangGraph-based AI news pipeline that pulls RSS sources, enriches articles with OpenGraph metadata, deduplicates and clusters similar stories, summarizes with OpenRouter (`openai/gpt-oss-20b`), and sends Telegram digest messages.
+LangGraph-based AI news pipeline that pulls RSS sources, enriches articles with OpenGraph metadata, deduplicates and clusters similar stories, summarizes with OpenRouter (`deepseek/deepseek-v4-flash`), and sends Telegram digest messages.
 
 ## What This App Does
 
@@ -14,7 +14,7 @@ LangGraph-based AI news pipeline that pulls RSS sources, enriches articles with 
 - Clusters cross-source same-story coverage and keeps one representative
 - Ranks candidates deterministically, then optionally re-ranks the top pool with one batched OpenRouter call
 - Caps each source at `MAX_ARTICLES_PER_SOURCE` (default 3) so no single feed floods the digest
-- Selects up to 50 stories per run (or fewer if less are available)
+- Selects up to 50 stories per run (default 20 as shipped in `.env.example`; the cap is `MAX_ARTICLES_PER_RUN=50`). Configure via the `MAX_ARTICLES_PER_RUN` env var or `--limit`.
 - Generates exactly 3-sentence summaries
 - Sends one Telegram message per selected story
 - Records successfully delivered stories to history so they aren't repeated in later runs
@@ -60,7 +60,7 @@ Each Telegram message is:
 
 - Language: Python 3.11+
 - Agent framework: LangGraph
-- LLM: OpenRouter (`openai/gpt-oss-20b`)
+- LLM: OpenRouter (`deepseek/deepseek-v4-flash`)
 - Observability: LangSmith
 
 ## Project Structure
@@ -70,6 +70,8 @@ src/app/
   graph/        # LangGraph workflow/state
   nodes/        # ingest/enrich/rank/summarize/deliver nodes
   services/     # RSS, extraction, ranking, OpenRouter, Telegram
+    middleware.py        # OpenRouter middleware: reasoning-effort injection + think-block stripping
+    scoring_keywords.py  # Keyword/phrase sets for relevance scoring (pure data)
   schemas/      # Pydantic models
   config.py     # environment settings
   main.py       # CLI entrypoint

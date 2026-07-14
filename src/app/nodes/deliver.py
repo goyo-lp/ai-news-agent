@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from app.config import get_settings
-from app.graph.state import AgentState
+from app.graph.state import AgentState, copy_state, merge_errors
 from app.schemas.article import parse_articles
 from app.services.history import record_deliveries
 from app.services.telegram_client import TelegramClient
@@ -29,18 +29,18 @@ async def deliver_node(state: AgentState) -> AgentState:
             settings.history_retention_days,
         )
 
-    next_state: AgentState = dict(state)
+    next_state = copy_state(state)
     next_state["delivery_results"] = results
 
     failures = [item for item in results if item.get("status") == "error"]
     logger.info("Delivery complete: %s sent, %s failed", len(results) - len(failures), len(failures))
 
-    if failures:
-        existing_errors = list(next_state.get("errors", []))
-        existing_errors.extend(
+    merge_errors(
+        next_state,
+        [
             f"Delivery failure ({item.get('article_id')}): {item.get('error', 'unknown')}"
             for item in failures
-        )
-        next_state["errors"] = existing_errors
+        ],
+    )
 
     return next_state
