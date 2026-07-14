@@ -104,8 +104,12 @@ class OpenGraphExtractor:
         except Exception as exc:
             return f"Enrichment failed ({enriched.source_name}): {exc}"
 
+        # Content-Length is advisory: absent for chunked transfer, multi-value
+        # ("1000, 1000") when proxies join headers, or non-numeric on misbehaving
+        # servers. Only honor a single decimal value; otherwise proceed (the
+        # body is already in memory by now).
         content_length = response.headers.get("content-length")
-        if content_length is not None and int(content_length) > _MAX_DOWNLOAD_BYTES:
+        if content_length is not None and content_length.isdecimal() and int(content_length) > _MAX_DOWNLOAD_BYTES:
             logger.warning(
                 "Enrichment skipped (%s): response too large (%s bytes)",
                 enriched.source_name,

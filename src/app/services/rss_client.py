@@ -135,8 +135,12 @@ class RSSClient:
         response = await client.get(source.rss, headers=headers)
         response.raise_for_status()
 
+        # Content-Length is advisory: absent for chunked transfer, multi-value
+        # ("1000, 1000") when proxies join headers, or non-numeric on misbehaving
+        # servers. Only honor a single decimal value; otherwise proceed (the
+        # body is already in memory by now).
         content_length = response.headers.get("content-length")
-        if content_length is not None and int(content_length) > _MAX_FEED_BYTES:
+        if content_length is not None and content_length.isdecimal() and int(content_length) > _MAX_FEED_BYTES:
             logger.warning(
                 "Skipping source %s: feed response too large (%s bytes)",
                 source.name,
