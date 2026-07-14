@@ -11,7 +11,6 @@ license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
   "langgraph",
-  "langchain",
   "langsmith",
   "httpx",
   "feedparser",
@@ -19,9 +18,7 @@ dependencies = [
   "lxml",
   "pydantic>=2,<3",
   "pydantic-settings>=2,<3",
-  "python-dotenv",
   "PyYAML",
-  "python-dateutil",
 ]
 
 [dependency-groups]
@@ -30,6 +27,7 @@ dev = [
   "pytest-asyncio",
   "mypy",
   "ruff",
+  "types-PyYAML",
 ]
 
 [project.scripts]
@@ -55,3 +53,7 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = ["feedparser"]
+ignore_missing_imports = true

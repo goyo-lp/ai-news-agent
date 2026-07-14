@@ -13,6 +13,8 @@ from app.services.rss_client import normalize_url
 
 logger = logging.getLogger(__name__)
 
+_MAX_DOWNLOAD_BYTES = 2_000_000
+
 
 def extract_open_graph_fields(html: str) -> tuple[str | None, str | None, str | None]:
     soup = BeautifulSoup(html, "lxml")
@@ -74,25 +76,46 @@ class OpenGraphExtractor:
         rules: FetchRules,
     ) -> tuple[Article, str | None]:
         enriched = article.model_copy(deep=True)
-        normalized_url = normalize_url(enriched.url)
-        enriched.url = normalized_url
+        enriched.url = normalize_url(enriched.url)
+        error: str | None = None
 
-        if is_domain_blocked(normalized_url, rules.blocked_domains):
-            if rules.image_fallback_rss_enclosure and enriched.rss_image_url:
-                enriched.image_url = enriched.rss_image_url
-            return enriched, None
+        if not is_domain_blocked(enriched.url, rules.blocked_domains):
+            error = await self._fetch_open_graph(client, enriched, rules)
 
+        if not enriched.image_url and rules.image_fallback_rss_enclosure and enriched.rss_image_url:
+            enriched.image_url = enriched.rss_image_url
+
+        return enriched, error
+
+    async def _fetch_open_graph(
+        self,
+        client: httpx.AsyncClient,
+        enriched: Article,
+        rules: FetchRules,
+    ) -> str | None:
+        """Fetch the article page and copy Open Graph fields onto it, in place."""
         headers: dict[str, str] = {}
         if rules.requires_user_agent:
             headers["User-Agent"] = self.settings.user_agent
 
         try:
-            response = await client.get(normalized_url, headers=headers)
+            response = await client.get(enriched.url, headers=headers)
             response.raise_for_status()
         except Exception as exc:
-            if rules.image_fallback_rss_enclosure and enriched.rss_image_url:
-                enriched.image_url = enriched.rss_image_url
-            return enriched, f"Enrichment failed ({enriched.source_name}): {exc}"
+            return f"Enrichment failed ({enriched.source_name}): {exc}"
+
+        # Content-Length is advisory: absent for chunked transfer, multi-value
+        # ("1000, 1000") when proxies join headers, or non-numeric on misbehaving
+        # servers. Only honor a single decimal value; otherwise proceed (the
+        # body is already in memory by now).
+        content_length = response.headers.get("content-length")
+        if content_length is not None and content_length.isdecimal() and int(content_length) > _MAX_DOWNLOAD_BYTES:
+            logger.warning(
+                "Enrichment skipped (%s): response too large (%s bytes)",
+                enriched.source_name,
+                content_length,
+            )
+            return f"Enrichment skipped ({enriched.source_name}): response too large"
 
         enriched.url = normalize_url(str(response.url))
 
@@ -106,7 +129,4 @@ class OpenGraphExtractor:
             if og_image:
                 enriched.image_url = og_image
 
-        if not enriched.image_url and rules.image_fallback_rss_enclosure and enriched.rss_image_url:
-            enriched.image_url = enriched.rss_image_url
-
-        return enriched, None
+        return None

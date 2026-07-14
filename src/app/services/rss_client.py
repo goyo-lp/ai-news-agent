@@ -30,6 +30,8 @@ _TRACKING_PARAMS = {
     "mc_eid",
 }
 
+_MAX_FEED_BYTES = 2_000_000
+
 
 def normalize_url(url: str) -> str:
     parsed = urlparse(url.strip())
@@ -51,7 +53,7 @@ def parse_entry_datetime(entry: dict[str, Any]) -> datetime | None:
                 parsed_struct.tm_sec,
                 tzinfo=timezone.utc,
             )
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
 
     date_text = entry.get("published") or entry.get("updated")
@@ -60,7 +62,7 @@ def parse_entry_datetime(entry: dict[str, Any]) -> datetime | None:
     try:
         parsed = parsedate_to_datetime(str(date_text))
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -132,6 +134,19 @@ class RSSClient:
         headers = {"User-Agent": self.settings.user_agent}
         response = await client.get(source.rss, headers=headers)
         response.raise_for_status()
+
+        # Content-Length is advisory: absent for chunked transfer, multi-value
+        # ("1000, 1000") when proxies join headers, or non-numeric on misbehaving
+        # servers. Only honor a single decimal value; otherwise proceed (the
+        # body is already in memory by now).
+        content_length = response.headers.get("content-length")
+        if content_length is not None and content_length.isdecimal() and int(content_length) > _MAX_FEED_BYTES:
+            logger.warning(
+                "Skipping source %s: feed response too large (%s bytes)",
+                source.name,
+                content_length,
+            )
+            return []
 
         parsed = feedparser.parse(response.text)
         entries = parsed.entries[: self.settings.max_feed_items_per_source]

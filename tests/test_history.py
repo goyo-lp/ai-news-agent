@@ -66,7 +66,7 @@ def test_load_history_missing_or_corrupt_file(tmp_path: Path) -> None:
     assert load_history(corrupt, retention_days=14) == []
 
 
-def test_filter_previously_delivered_drops_known_urls(tmp_path: Path) -> None:
+def test_filter_previously_delivered_drops_known_urls() -> None:
     delivered = _article("a1", "https://example.com/a1", "Seen story")
     fresh = _article("a2", "https://example.com/a2", "New story")
     now = datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc)
@@ -83,7 +83,7 @@ def test_filter_previously_delivered_drops_known_urls(tmp_path: Path) -> None:
     assert [article.id for article in filtered] == ["a2"]
 
 
-def test_filter_previously_delivered_keeps_same_day_deliveries(tmp_path: Path) -> None:
+def test_filter_previously_delivered_keeps_same_day_deliveries() -> None:
     """Same-day runs shouldn't starve the digest: only prior-day deliveries drop."""
     delivered_today = _article("a1", "https://example.com/a1", "Seen earlier today")
     fresh = _article("a2", "https://example.com/a2", "New story")
@@ -102,9 +102,32 @@ def test_filter_previously_delivered_keeps_same_day_deliveries(tmp_path: Path) -
     assert [article.id for article in filtered] == ["a1", "a2"]
 
 
-def test_filter_previously_delivered_empty_history_keeps_all(tmp_path: Path) -> None:
+def test_filter_previously_delivered_empty_history_keeps_all() -> None:
     a1 = _article("a1", "https://example.com/a1", "Story A")
     a2 = _article("a2", "https://example.com/a2", "Story B")
     now = datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc)
 
     assert filter_previously_delivered([a1, a2], [], now=now) == [a1, a2]
+
+
+def test_record_deliveries_is_idempotent_on_same_url(tmp_path: Path) -> None:
+    history_file = tmp_path / "history.json"
+    article = _article("a1", "https://example.com/a1", "OpenAI launches new model")
+    results = [{"article_id": "a1", "status": "sent"}]
+
+    record_deliveries(history_file, [article], results, retention_days=14)
+    record_deliveries(history_file, [article], results, retention_days=14)
+    history = load_history(history_file, retention_days=14)
+
+    assert len(history) == 1
+    assert history[0]["url"] == "https://example.com/a1"
+
+
+def test_record_deliveries_no_sent_returns_early(tmp_path: Path) -> None:
+    history_file = tmp_path / "history.json"
+    article = _article("a1", "https://example.com/a1", "Title")
+    results = [{"article_id": "a1", "status": "error"}]
+
+    record_deliveries(history_file, [article], results, retention_days=14)
+
+    assert not history_file.exists()

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -9,6 +11,17 @@ from typing import Any
 from app.schemas.article import Article
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_delivered_at(entry: dict[str, Any]) -> datetime | None:
+    """Parse an entry's delivered_at timestamp, assuming UTC when naive."""
+    try:
+        delivered_at = datetime.fromisoformat(entry["delivered_at"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if delivered_at.tzinfo is None:
+        delivered_at = delivered_at.replace(tzinfo=timezone.utc)
+    return delivered_at
 
 
 def load_history(
@@ -35,13 +48,8 @@ def load_history(
 
     kept: list[dict[str, Any]] = []
     for entry in entries:
-        try:
-            delivered_at = datetime.fromisoformat(entry["delivered_at"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        if delivered_at.tzinfo is None:
-            delivered_at = delivered_at.replace(tzinfo=timezone.utc)
-        if delivered_at >= cutoff:
+        delivered_at = _parse_delivered_at(entry)
+        if delivered_at is not None and delivered_at >= cutoff:
             kept.append(entry)
     return kept
 
@@ -80,12 +88,9 @@ def filter_previously_delivered(
         url = entry.get("url")
         if not url:
             continue
-        try:
-            delivered_at = datetime.fromisoformat(entry["delivered_at"])
-        except (KeyError, TypeError, ValueError):
+        delivered_at = _parse_delivered_at(entry)
+        if delivered_at is None:
             continue
-        if delivered_at.tzinfo is None:
-            delivered_at = delivered_at.replace(tzinfo=timezone.utc)
         if delivered_at.astimezone(reference_now.tzinfo).date() < today:
             seen.add(url)
     return [article for article in articles if article.url not in seen]
@@ -120,4 +125,24 @@ def record_deliveries(
 
     file_path = Path(path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_text(json.dumps(history, indent=2), encoding="utf-8")
+    payload = json.dumps(history, indent=2)
+
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=str(file_path.parent),
+            delete=False,
+            mode="w",
+            encoding="utf-8",
+            suffix=".tmp",
+        ) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+            tmp_file.write(payload)
+        os.replace(tmp_path, file_path)
+    except Exception:
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+        raise

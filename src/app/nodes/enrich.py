@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from app.config import get_settings
-from app.graph.state import AgentState
+from app.graph.state import AgentState, copy_state, merge_errors
 from app.schemas.article import FetchRules, SourceConfig, parse_articles, serialize_articles
 from app.services.extractor import OpenGraphExtractor
 from app.services.tracing import traceable
@@ -27,12 +27,9 @@ async def enrich_node(state: AgentState) -> AgentState:
     extractor = OpenGraphExtractor(settings)
     enriched, errors = await extractor.enrich_articles(raw_articles, source_rules)
 
-    next_state: AgentState = dict(state)
+    next_state = copy_state(state)
     next_state["articles_enriched"] = serialize_articles(enriched)
-
-    existing_errors = list(next_state.get("errors", []))
-    existing_errors.extend(errors)
-    next_state["errors"] = existing_errors
+    merge_errors(next_state, errors)
 
     logger.info("Enrichment complete: %s items", len(enriched))
     return next_state

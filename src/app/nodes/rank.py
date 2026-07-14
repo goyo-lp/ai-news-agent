@@ -4,11 +4,11 @@ import logging
 from datetime import datetime, timezone
 
 from app.config import get_settings
-from app.graph.state import AgentState
+from app.graph.state import AgentState, copy_state, merge_errors
 from app.schemas.article import Article, parse_articles, serialize_articles
 from app.services.history import delivered_titles, filter_previously_delivered, load_history
 from app.services.openrouter_client import OpenRouterClient
-from app.services.scoring import rank_articles
+from app.services.scoring import article_sort_key, rank_articles
 from app.services.tracing import traceable
 
 logger = logging.getLogger(__name__)
@@ -76,7 +76,7 @@ async def rank_node(state: AgentState) -> AgentState:
     )
 
     client = OpenRouterClient(settings)
-    llm_scores = await client.score_articles_relevance(candidates, dry_run=dry_run)
+    llm_scores, llm_error = await client.score_articles_relevance(candidates, dry_run=dry_run)
     if llm_scores:
         for article in candidates:
             llm_score = llm_scores.get(article.id)
@@ -86,19 +86,15 @@ async def rank_node(state: AgentState) -> AgentState:
                     + _LLM_BLEND_WEIGHT * llm_score,
                     5,
                 )
-        candidates.sort(
-            key=lambda a: (
-                a.score or 0.0,
-                a.published_at or datetime.min.replace(tzinfo=timezone.utc),
-            ),
-            reverse=True,
-        )
+        candidates.sort(key=article_sort_key, reverse=True)
         logger.info("LLM re-rank blended scores for %s items", len(llm_scores))
 
     selected = candidates[:limit]
 
-    next_state: AgentState = dict(state)
+    next_state = copy_state(state)
     next_state["articles_selected"] = serialize_articles(selected)
+    if llm_error:
+        merge_errors(next_state, [llm_error])
 
     logger.info("Ranking complete: selected %s items", len(selected))
     return next_state

@@ -18,13 +18,15 @@ from typing import Any, Awaitable, Callable, Protocol
 
 logger = logging.getLogger(__name__)
 
-OPEN = chr(60) + "think" + chr(62)
-CLOSE = chr(60) + "/think" + chr(62)
+THINK_OPEN = chr(60) + "think" + chr(62)
+THINK_CLOSE = chr(60) + "/think" + chr(62)
 
 # Matches a full reasoning block (non-greedy, DOTALL, case-insensitive).
-_THINK_BLOCK = re.compile(re.escape(OPEN) + r".*?" + re.escape(CLOSE), re.IGNORECASE | re.DOTALL)
+_THINK_BLOCK = re.compile(
+    re.escape(THINK_OPEN) + r".*?" + re.escape(THINK_CLOSE), re.IGNORECASE | re.DOTALL
+)
 # Defensive: a trailing unclosed block (when max_tokens truncates the model mid-reasoning).
-_UNCLOSED_THINK = re.compile(re.escape(OPEN) + r".*$", re.IGNORECASE | re.DOTALL)
+_UNCLOSED_THINK = re.compile(re.escape(THINK_OPEN) + r".*$", re.IGNORECASE | re.DOTALL)
 
 
 def strip_think_blocks(text: str) -> str:
@@ -64,7 +66,7 @@ def reasoning_effort_middleware(effort: str | None) -> Middleware:
     return middleware
 
 
-def lookup_reasoning_effort(value: Any) -> str | None:
+def normalize_reasoning_effort(value: Any) -> str | None:
     """Coerce a Settings value into a reasoning-effort string or None."""
     if value is None:
         return None
@@ -77,9 +79,6 @@ class MiddlewareChain:
 
     def __init__(self, middlewares: list[Middleware] | None = None) -> None:
         self._middlewares: list[Middleware] = list(middlewares or [])
-
-    def add(self, middleware: Middleware) -> None:
-        self._middlewares.append(middleware)
 
     async def execute(
         self,

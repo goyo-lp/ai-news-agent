@@ -89,23 +89,42 @@ class TelegramClient:
             }
 
         if article.image_url:
-            payload = {
-                "chat_id": self.settings.telegram_chat_id,
-                "photo": article.image_url,
-                "caption": caption,
-                "parse_mode": self.settings.telegram_parse_mode,
-            }
-            sent = await self._post_with_retry(client, "sendPhoto", payload)
-            if sent.get("ok"):
-                return {
-                    "article_id": article.id,
-                    "status": "sent",
-                    "mode": "photo",
-                    "message_id": sent["result"].get("message_id"),
-                }
-
+            result = await self._send_photo(client, article, caption)
+            if result is not None:
+                return result
             logger.warning("Photo send failed for %s, falling back to text", article.id)
 
+        return await self._send_text(client, article, text_message)
+
+    async def _send_photo(
+        self,
+        client: httpx.AsyncClient,
+        article: Article,
+        caption: str,
+    ) -> dict[str, Any] | None:
+        """Send as a photo message; None means the caller should fall back to text."""
+        payload = {
+            "chat_id": self.settings.telegram_chat_id,
+            "photo": article.image_url,
+            "caption": caption,
+            "parse_mode": self.settings.telegram_parse_mode,
+        }
+        sent = await self._post_with_retry(client, "sendPhoto", payload)
+        if sent.get("ok"):
+            return {
+                "article_id": article.id,
+                "status": "sent",
+                "mode": "photo",
+                "message_id": sent["result"].get("message_id"),
+            }
+        return None
+
+    async def _send_text(
+        self,
+        client: httpx.AsyncClient,
+        article: Article,
+        text_message: str,
+    ) -> dict[str, Any]:
         payload = {
             "chat_id": self.settings.telegram_chat_id,
             "text": text_message,
@@ -143,7 +162,7 @@ class TelegramClient:
         for attempt in range(1, attempts + 1):
             try:
                 response = await client.post(url, json=payload)
-                data = response.json()
+                data: dict[str, Any] = response.json()
                 if response.status_code == 429:
                     retry_after = int(data.get("parameters", {}).get("retry_after", 2))
                     await asyncio.sleep(retry_after)
