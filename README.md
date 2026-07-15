@@ -85,9 +85,9 @@ src/app/
   graph/        # LangGraph workflow/state
   nodes/        # ingest/enrich/rank/summarize/deliver nodes
   services/     # RSS, extraction, ranking, OpenRouter, Telegram
-    http_utils.py         # shared SSRF guard + streaming size-capped GET
-    middleware.py         # OpenRouter middleware: reasoning-effort injection + think-block stripping
-    scoring_keywords.py   # Keyword/phrase sets for relevance scoring (pure data)
+    http_utils.py         # shared SSRF guard + size-capped GET
+    middleware.py         # reasoning-effort injection + think-block strip
+    scoring_keywords.py   # keyword/phrase sets for scoring (pure data)
   schemas/      # Pydantic models
   config.py     # environment settings
   utils.py      # small shared helpers (e.g. reference-time resolution)
