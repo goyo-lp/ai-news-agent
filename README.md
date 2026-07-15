@@ -82,23 +82,23 @@ Each Telegram message is:
 
 ```text
 src/app/
-  graph/        # LangGraph workflow/state
-  nodes/        # ingest/enrich/rank/summarize/deliver nodes
-  services/     # RSS, extraction, ranking, OpenRouter, Telegram
-    http_utils.py         # shared SSRF guard + size-capped GET
-    middleware.py         # reasoning-effort injection + think-block strip
-    scoring_keywords.py   # keyword/phrase sets for scoring (pure data)
-  schemas/      # Pydantic models
-  config.py     # environment settings
-  utils.py      # small shared helpers (e.g. reference-time resolution)
-  main.py       # CLI entrypoint
+├── graph/                   # LangGraph workflow/state
+├── nodes/                   # ingest/enrich/rank/summarize/deliver nodes
+├── services/                # RSS, extraction, ranking, OpenRouter, Telegram
+│   ├── http_utils.py        # shared SSRF guard + size-capped GET
+│   ├── middleware.py        # reasoning-effort injection + think-block strip
+│   └── scoring_keywords.py  # keyword/phrase sets for scoring (pure data)
+├── schemas/                 # Pydantic models
+├── config.py                # environment settings
+├── utils.py                 # small shared helpers (e.g. reference-time)
+└── main.py                  # CLI entrypoint
 
 data/
-  news-sources.yaml
-  delivery-history.json   # generated at runtime, gitignored
+├── news-sources.yaml
+└── delivery-history.json    # generated at runtime, gitignored
 
 tests/
-  unit tests
+└── unit tests
 ```
 
 ## Setup
