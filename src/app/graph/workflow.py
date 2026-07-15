@@ -48,6 +48,10 @@ def route_after_rank(state: AgentState) -> str:
 
 
 def build_workflow() -> Any:
+    """Assemble and compile the 5-node pipeline: ingest -> enrich -> rank ->
+    (summarize -> deliver | END). Each node shares the same retry policy and a
+    pinned error handler; rank has a conditional early exit (route_after_rank)
+    when nothing survives filtering."""
     graph = StateGraph(AgentState)
 
     retry = _retry_policy()

@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     )
 
     def missing_required_runtime_fields(self, dry_run: bool) -> list[str]:
+        """Telegram credentials are only required for real runs; --dry-run never
+        calls Telegram, so it's exempt from this check."""
         missing: list[str] = []
 
         if not dry_run:
@@ -57,6 +59,8 @@ def get_settings() -> Settings:
 
 
 def configure_langsmith_env(settings: Settings) -> None:
+    """Mirror LangSmith settings into env vars: the langsmith SDK reads its config
+    from the environment, not from values passed programmatically."""
     if settings.langsmith_api_key:
         os.environ["LANGSMITH_API_KEY"] = settings.langsmith_api_key
     os.environ["LANGSMITH_PROJECT"] = settings.langsmith_project

@@ -4,6 +4,7 @@ import asyncio
 import html
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -15,6 +16,14 @@ logger = logging.getLogger(__name__)
 TELEGRAM_CAPTION_LIMIT = 1024
 TELEGRAM_TEXT_LIMIT = 4096
 
+_ALLOWED_URL_SCHEMES = {"http", "https"}
+
+
+def _safe_href(url: str) -> str:
+    """Return url unchanged if it's http(s); otherwise '#', so a javascript:/data:/
+    etc. scheme scraped from an article never becomes a clickable link."""
+    return url if urlparse(url).scheme.lower() in _ALLOWED_URL_SCHEMES else "#"
+
 
 def _truncate_text(value: str, limit: int) -> str:
     if len(value) <= limit:
@@ -24,10 +33,18 @@ def _truncate_text(value: str, limit: int) -> str:
     return value[: limit - 3].rstrip() + "..."
 
 
+def _escape_fields(url: str, title: str, summary: str) -> tuple[str, str, str]:
+    return (
+        html.escape(_safe_href(url), quote=True),
+        html.escape(title, quote=False),
+        html.escape(summary, quote=False),
+    )
+
+
 def build_telegram_caption(url: str, title: str, summary: str, limit: int = TELEGRAM_CAPTION_LIMIT) -> str:
-    safe_url = html.escape(url, quote=True)
-    safe_title = html.escape(title, quote=False)
-    safe_summary = html.escape(summary, quote=False)
+    """Build a photo-caption HTML string, reserving up to 1/3 of `limit` for the
+    title (clamped 40-200 chars) and giving the rest to the summary."""
+    safe_url, safe_title, safe_summary = _escape_fields(url, title, summary)
 
     max_title_len = max(40, min(200, limit // 3))
     safe_title = _truncate_text(safe_title, max_title_len)
@@ -40,9 +57,7 @@ def build_telegram_caption(url: str, title: str, summary: str, limit: int = TELE
 
 
 def build_telegram_text(url: str, title: str, summary: str, limit: int = TELEGRAM_TEXT_LIMIT) -> str:
-    safe_url = html.escape(url, quote=True)
-    safe_title = html.escape(title, quote=False)
-    safe_summary = html.escape(summary, quote=False)
+    safe_url, safe_title, safe_summary = _escape_fields(url, title, summary)
 
     text = f'<a href="{safe_url}">{safe_title}</a>\n\n{safe_summary}'
     return _truncate_text(text, limit)
@@ -53,6 +68,9 @@ class TelegramClient:
         self.settings = settings
 
     async def send_articles(self, articles: list[Article], dry_run: bool) -> list[dict[str, Any]]:
+        # Deliberately sequential, not gathered: Telegram rate-limits per chat, and
+        # digest ordering matters (story 1 should land before story 2 in-channel).
+        # Parallelizing risks 429 thrashing and out-of-order delivery.
         timeout = httpx.Timeout(self.settings.request_timeout_seconds)
         async with httpx.AsyncClient(timeout=timeout) as client:
             results: list[dict[str, Any]] = []
@@ -177,6 +195,11 @@ class TelegramClient:
                 if attempt < attempts:
                     await asyncio.sleep(attempt)
                     continue
-                return {"ok": False, "description": str(exc)}
+                # The bot token lives in `url` (Telegram's API requires it in the
+                # path, not a header); redact it in case a future httpx exception
+                # type ever stringifies the request URL.
+                message = str(exc).replace(token, "***")
+                logger.warning("Telegram %s failed after %s attempts: %s", method, attempts, message)
+                return {"ok": False, "description": message}
 
         return {"ok": False, "description": "Unknown send failure."}

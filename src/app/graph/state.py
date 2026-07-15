@@ -4,6 +4,9 @@ from typing import Any, TypedDict, cast
 
 
 class AgentState(TypedDict, total=False):
+    """Shared pipeline state for one workflow.ainvoke() run. All fields are
+    per-run except delivery_history, which rank_node loads from disk and
+    deliver_node reuses (rather than re-reading the file) when recording sends."""
     run_id: str
     started_at: str
     dry_run: bool
@@ -13,6 +16,7 @@ class AgentState(TypedDict, total=False):
     articles_raw: list[dict[str, Any]]
     articles_enriched: list[dict[str, Any]]
     articles_selected: list[dict[str, Any]]
+    delivery_history: list[dict[str, Any]]
     delivery_results: list[dict[str, Any]]
     errors: list[str]
 

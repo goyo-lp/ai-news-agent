@@ -27,6 +27,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def run_pipeline(args: argparse.Namespace) -> int:
+    """Run one full pipeline invocation. Exit codes: 0 success, 1 one-or-more
+    delivery failures, 2 config error (checked before the graph even builds)."""
     settings = get_settings()
     configure_langsmith_env(settings)
     dry_run = bool(args.dry_run)

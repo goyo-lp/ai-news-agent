@@ -26,7 +26,7 @@ def test_record_and_load_round_trip(tmp_path: Path) -> None:
     article = _article("a1", "https://example.com/a1", "OpenAI launches new model")
     results = [{"article_id": "a1", "status": "sent"}]
 
-    record_deliveries(history_file, [article], results, retention_days=14)
+    record_deliveries(history_file, [article], results, history=[])
     history = load_history(history_file, retention_days=14)
 
     assert len(history) == 1
@@ -39,7 +39,7 @@ def test_record_skips_failed_deliveries(tmp_path: Path) -> None:
     article = _article("a1", "https://example.com/a1", "Title")
     results = [{"article_id": "a1", "status": "error"}]
 
-    record_deliveries(history_file, [article], results, retention_days=14)
+    record_deliveries(history_file, [article], results, history=[])
 
     assert not history_file.exists()
 
@@ -115,8 +115,9 @@ def test_record_deliveries_is_idempotent_on_same_url(tmp_path: Path) -> None:
     article = _article("a1", "https://example.com/a1", "OpenAI launches new model")
     results = [{"article_id": "a1", "status": "sent"}]
 
-    record_deliveries(history_file, [article], results, retention_days=14)
-    record_deliveries(history_file, [article], results, retention_days=14)
+    record_deliveries(history_file, [article], results, history=[])
+    history_after_first = load_history(history_file, retention_days=14)
+    record_deliveries(history_file, [article], results, history=history_after_first)
     history = load_history(history_file, retention_days=14)
 
     assert len(history) == 1
@@ -128,6 +129,6 @@ def test_record_deliveries_no_sent_returns_early(tmp_path: Path) -> None:
     article = _article("a1", "https://example.com/a1", "Title")
     results = [{"article_id": "a1", "status": "error"}]
 
-    record_deliveries(history_file, [article], results, retention_days=14)
+    record_deliveries(history_file, [article], results, history=[])
 
     assert not history_file.exists()

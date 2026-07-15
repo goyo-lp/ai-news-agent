@@ -19,6 +19,12 @@ LangGraph-based AI news pipeline that pulls RSS sources, enriches articles with 
 - Sends one Telegram message per selected story
 - Records successfully delivered stories to history so they aren't repeated in later runs
 
+Hardening built into the fetch/LLM/delivery paths (see [Security](#security)):
+- Blocks outbound fetches to private/loopback/link-local/cloud-metadata addresses
+- Enforces byte caps on RSS and article-page downloads against actual bytes received, not just the advisory `Content-Length` header
+- Frames scraped article content as untrusted data in LLM prompts (prompt-injection mitigation)
+- Redacts the Telegram bot token from any error message before logging
+
 ## Ranking Logic (Relevance-First)
 
 Ranking now prioritizes relevance to high-signal AI business and product developments.
@@ -63,6 +69,15 @@ Each Telegram message is:
 - LLM: OpenRouter (`deepseek/deepseek-v4-flash`)
 - Observability: LangSmith
 
+## Security
+
+- **SSRF protection**: article-page and RSS fetches run through an `httpx` request hook (`services/http_utils.py`) that blocks requests to private/loopback/link-local/reserved IPs and known cloud-metadata hostnames, on every request including redirect hops. This is a literal-address check, not DNS resolution — a domain that *resolves* to an internal address (DNS rebinding) isn't caught.
+- **Download size caps**: RSS and article-page fetches stream the response body and abort once actual bytes received exceed the cap, rather than trusting the (spoofable/absent) `Content-Length` header after the whole body is already buffered.
+- **Prompt-injection framing**: scraped article title/description text is explicitly framed as untrusted data in both the summarization and relevance-scoring prompts sent to OpenRouter, since article content can be attacker-influenced (e.g. a Hacker News or Reddit submission). This mitigates, not eliminates, injection risk.
+- **URL scheme allowlist**: only `http`/`https` article URLs become clickable Telegram links; anything else (e.g. `javascript:`) is replaced with `#`.
+- **Secret redaction**: the Telegram bot token (embedded in the request URL per Telegram's API design) is redacted from any exception message before it's logged.
+- Dependencies have been checked with `pip-audit` against the PyPI/OSV advisory database (no known vulnerabilities as of the last manual check) — this isn't yet wired into CI, so re-run it periodically: `uvx pip-audit --requirement <(uv export --no-hashes)`.
+
 ## Project Structure
 
 ```text
@@ -70,10 +85,12 @@ src/app/
   graph/        # LangGraph workflow/state
   nodes/        # ingest/enrich/rank/summarize/deliver nodes
   services/     # RSS, extraction, ranking, OpenRouter, Telegram
-    middleware.py        # OpenRouter middleware: reasoning-effort injection + think-block stripping
-    scoring_keywords.py  # Keyword/phrase sets for relevance scoring (pure data)
+    http_utils.py         # shared SSRF guard + streaming size-capped GET
+    middleware.py         # OpenRouter middleware: reasoning-effort injection + think-block stripping
+    scoring_keywords.py   # Keyword/phrase sets for relevance scoring (pure data)
   schemas/      # Pydantic models
   config.py     # environment settings
+  utils.py      # small shared helpers (e.g. reference-time resolution)
   main.py       # CLI entrypoint
 
 data/

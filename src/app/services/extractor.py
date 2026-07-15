@@ -9,6 +9,11 @@ from bs4 import BeautifulSoup
 
 from app.config import Settings
 from app.schemas.article import Article, FetchRules
+from app.services.http_utils import (
+    ResponseTooLargeError,
+    get_capped,
+    reject_private_network_requests,
+)
 from app.services.rss_client import normalize_url
 
 logger = logging.getLogger(__name__)
@@ -17,22 +22,50 @@ _MAX_DOWNLOAD_BYTES = 2_000_000
 
 
 def extract_open_graph_fields(html: str) -> tuple[str | None, str | None, str | None]:
+    """Extract og:*/twitter:*/description meta tags in a single DOM pass.
+
+    Builds property/name lookup tables once instead of calling soup.find() per
+    candidate key (each of which walks the tree from scratch); property matches
+    still take precedence over name matches for the same key, matching the prior
+    per-key search order.
+    """
     soup = BeautifulSoup(html, "lxml")
 
-    def meta_value(*keys: str) -> str | None:
+    # Record the first tag's content per key (even if empty) — mirrors the old
+    # find(property=key) or find(name=key) short-circuit: a property tag's mere
+    # presence for a key blocks falling back to a name tag for that same key,
+    # even if the property tag's content turns out to be empty.
+    by_property: dict[str, str] = {}
+    by_name: dict[str, str] = {}
+    for tag in soup.find_all("meta"):
+        content = str(tag.get("content") or "").strip()
+        property_key = tag.get("property")
+        if property_key and property_key not in by_property:
+            by_property[str(property_key)] = content
+        name_key = tag.get("name")
+        if name_key and name_key not in by_name:
+            by_name[str(name_key)] = content
+
+    def first_present(*keys: str) -> str | None:
         for key in keys:
-            tag = soup.find("meta", attrs={"property": key}) or soup.find("meta", attrs={"name": key})
-            if tag and tag.get("content"):
-                return str(tag["content"]).strip()
+            if key in by_property:
+                value = by_property[key]
+            elif key in by_name:
+                value = by_name[key]
+            else:
+                continue
+            if value:
+                return value
         return None
 
-    og_title = meta_value("og:title", "twitter:title")
-    og_description = meta_value("og:description", "description", "twitter:description")
-    og_image = meta_value("og:image", "twitter:image", "twitter:image:src")
+    og_title = first_present("og:title", "twitter:title")
+    og_description = first_present("og:description", "description", "twitter:description")
+    og_image = first_present("og:image", "twitter:image", "twitter:image:src")
     return og_title, og_description, og_image
 
 
 def is_domain_blocked(url: str, blocked_domains: list[str]) -> bool:
+    """Match a host against an operator-configured blocklist (exact or subdomain)."""
     host = (urlparse(url).hostname or "").lower()
     for blocked in blocked_domains:
         target = blocked.lower().strip()
@@ -50,13 +83,20 @@ class OpenGraphExtractor:
         articles: list[Article],
         source_rules: dict[str, FetchRules],
     ) -> tuple[list[Article], list[str]]:
+        """Enrich all articles concurrently (bounded by http_concurrency); returns
+        (enriched articles — always same length/order as input, one copy per
+        article — and non-fatal per-article error descriptions)."""
         timeout = httpx.Timeout(self.settings.request_timeout_seconds)
         semaphore = asyncio.Semaphore(self.settings.http_concurrency)
 
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            follow_redirects=True,
+            event_hooks={"request": [reject_private_network_requests]},
+        ) as client:
             async def worker(article: Article) -> tuple[Article, str | None]:
                 async with semaphore:
-                    return await self._enrich_one(client, article, source_rules.get(article.source_name, FetchRules()))
+                    return await self.enrich_article(client, article, source_rules.get(article.source_name, FetchRules()))
 
             results = await asyncio.gather(*(worker(article) for article in articles))
 
@@ -69,7 +109,7 @@ class OpenGraphExtractor:
 
         return enriched, errors
 
-    async def _enrich_one(
+    async def enrich_article(
         self,
         client: httpx.AsyncClient,
         article: Article,
@@ -99,23 +139,18 @@ class OpenGraphExtractor:
             headers["User-Agent"] = self.settings.user_agent
 
         try:
-            response = await client.get(enriched.url, headers=headers)
-            response.raise_for_status()
-        except Exception as exc:
-            return f"Enrichment failed ({enriched.source_name}): {exc}"
-
-        # Content-Length is advisory: absent for chunked transfer, multi-value
-        # ("1000, 1000") when proxies join headers, or non-numeric on misbehaving
-        # servers. Only honor a single decimal value; otherwise proceed (the
-        # body is already in memory by now).
-        content_length = response.headers.get("content-length")
-        if content_length is not None and content_length.isdecimal() and int(content_length) > _MAX_DOWNLOAD_BYTES:
+            response = await get_capped(client, enriched.url, headers, _MAX_DOWNLOAD_BYTES)
+        except ResponseTooLargeError:
             logger.warning(
-                "Enrichment skipped (%s): response too large (%s bytes)",
+                "Enrichment skipped (%s): response too large (>%s bytes)",
                 enriched.source_name,
-                content_length,
+                _MAX_DOWNLOAD_BYTES,
             )
             return f"Enrichment skipped ({enriched.source_name}): response too large"
+        except Exception as exc:
+            error = f"Enrichment failed ({enriched.source_name}): {exc}"
+            logger.warning(error)
+            return error
 
         enriched.url = normalize_url(str(response.url))
 

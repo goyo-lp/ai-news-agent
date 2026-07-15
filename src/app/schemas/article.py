@@ -28,6 +28,8 @@ class SourceConfig(BaseModel):
     fetch_overrides: SourceFetchOverrides | None = None
 
     def merged_rules(self, defaults: FetchRules) -> FetchRules:
+        """Apply this source's field-level overrides onto the global defaults;
+        an unset (None) override field falls through to the default."""
         overrides = self.fetch_overrides
         if overrides is None:
             return defaults
@@ -56,6 +58,11 @@ class SourcesFile(BaseModel):
 
 
 class Article(BaseModel):
+    """The pipeline's central data model — every node and service operates on
+    this. Fields accumulate as an article moves through ingest -> enrich -> rank
+    -> summarize; all fields beyond the RSS-derived ones are optional/None until
+    that stage sets them."""
+
     id: str
     source_name: str
     source_rss: str
@@ -76,18 +83,24 @@ class Article(BaseModel):
 
     @property
     def effective_title(self) -> str:
+        """Prefer the OpenGraph title (usually better-formatted) over the raw RSS one."""
         return self.og_title or self.title
 
     @property
     def effective_summary_source(self) -> str:
+        """Prefer the OpenGraph description over the RSS one as summarization context."""
         return self.og_description or self.description or ""
 
 
 def serialize_articles(articles: list[Article]) -> list[dict[str, Any]]:
+    """AgentState stores plain dicts (TypedDict/JSON-compatible), not Pydantic
+    models — nodes call this at the state boundary."""
     return [article.model_dump(mode="json") for article in articles]
 
 
 def parse_articles(payload: list[dict[str, Any]] | None) -> list[Article]:
+    """Inverse of serialize_articles: rehydrate AgentState's dicts back into
+    Article models at the start of a node."""
     if not payload:
         return []
     return [Article.model_validate(item) for item in payload]

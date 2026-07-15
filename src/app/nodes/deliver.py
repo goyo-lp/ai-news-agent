@@ -26,7 +26,7 @@ async def deliver_node(state: AgentState) -> AgentState:
             settings.history_file,
             articles,
             results,
-            settings.history_retention_days,
+            state.get("delivery_history", []),
         )
 
     next_state = copy_state(state)

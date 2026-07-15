@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from app.schemas.article import Article
+from app.utils import resolve_reference_now
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +79,7 @@ def filter_previously_delivered(
     if not history:
         return articles
 
-    reference_now = now if now is not None else datetime.now().astimezone()
-    if reference_now.tzinfo is None:
-        reference_now = reference_now.replace(tzinfo=timezone.utc)
+    reference_now = resolve_reference_now(now)
     today = reference_now.astimezone().date()
 
     seen: set[str] = set()
@@ -100,16 +99,20 @@ def record_deliveries(
     path: str | Path,
     articles: list[Article],
     results: list[dict[str, Any]],
-    retention_days: int,
+    history: list[dict[str, Any]],
     now: datetime | None = None,
 ) -> None:
-    """Append successfully sent articles to the history file, pruning expired entries."""
+    """Append successfully sent articles to the history file, pruning expired entries.
+
+    `history` should be the already-loaded, already-pruned history for this run (e.g.
+    from AgentState, loaded once by rank_node) rather than re-read from disk here.
+    """
     sent_ids = {item.get("article_id") for item in results if item.get("status") == "sent"}
     if not sent_ids:
         return
 
     reference_now = now if now is not None else datetime.now(timezone.utc)
-    history = load_history(path, retention_days, now=reference_now)
+    history = list(history)
     known_urls = delivered_urls(history)
 
     for article in articles:

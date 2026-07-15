@@ -14,6 +14,11 @@ import yaml
 
 from app.config import Settings
 from app.schemas.article import Article, FetchRules, SourceConfig, SourcesFile
+from app.services.http_utils import (
+    ResponseTooLargeError,
+    get_capped,
+    reject_private_network_requests,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +39,7 @@ _MAX_FEED_BYTES = 2_000_000
 
 
 def normalize_url(url: str) -> str:
+    """Strip tracking params and fragment so equivalent URLs compare/dedup equal."""
     parsed = urlparse(url.strip())
     cleaned_query = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k not in _TRACKING_PARAMS]
     normalized = parsed._replace(fragment="", query=urlencode(cleaned_query, doseq=True))
@@ -41,6 +47,9 @@ def normalize_url(url: str) -> str:
 
 
 def parse_entry_datetime(entry: dict[str, Any]) -> datetime | None:
+    """Parse a feed entry's timestamp, trying feedparser's pre-parsed struct first,
+    then falling back to raw RFC-2822 text; feeds are inconsistent about which
+    fields they populate. Returns None if nothing usable is present."""
     parsed_struct = entry.get("published_parsed") or entry.get("updated_parsed")
     if parsed_struct is not None:
         try:
@@ -66,41 +75,59 @@ def parse_entry_datetime(entry: dict[str, Any]) -> datetime | None:
         return None
 
 
-def extract_entry_image(entry: dict[str, Any]) -> str | None:
-    media_content = entry.get("media_content") or []
-    if isinstance(media_content, list):
-        for item in media_content:
-            if isinstance(item, dict) and item.get("url"):
-                return str(item["url"])
-
-    media_thumbnail = entry.get("media_thumbnail") or []
-    if isinstance(media_thumbnail, list):
-        for item in media_thumbnail:
-            if isinstance(item, dict) and item.get("url"):
-                return str(item["url"])
-
-    links = entry.get("links") or []
-    if isinstance(links, list):
-        for link in links:
-            if not isinstance(link, dict):
-                continue
-            link_type = str(link.get("type") or "")
-            if link_type.startswith("image/") and link.get("href"):
-                return str(link["href"])
-
-    image = entry.get("image")
-    if isinstance(image, dict) and image.get("href"):
-        return str(image["href"])
-
+def _image_from_list_field(entry: dict[str, Any], field: str) -> str | None:
+    """Search a feedparser list field (media_content / media_thumbnail) for a URL."""
+    items = entry.get(field) or []
+    if not isinstance(items, list):
+        return None
+    for item in items:
+        if isinstance(item, dict) and item.get("url"):
+            return str(item["url"])
     return None
 
 
+def _image_from_links(entry: dict[str, Any]) -> str | None:
+    links = entry.get("links") or []
+    if not isinstance(links, list):
+        return None
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        link_type = str(link.get("type") or "")
+        if link_type.startswith("image/") and link.get("href"):
+            return str(link["href"])
+    return None
+
+
+def _image_from_image_field(entry: dict[str, Any]) -> str | None:
+    image = entry.get("image")
+    if isinstance(image, dict) and image.get("href"):
+        return str(image["href"])
+    return None
+
+
+def extract_entry_image(entry: dict[str, Any]) -> str | None:
+    """Try RSS image sources in priority order: media:content, media:thumbnail,
+    an image/* rel link, then a bare <image> element."""
+    return (
+        _image_from_list_field(entry, "media_content")
+        or _image_from_list_field(entry, "media_thumbnail")
+        or _image_from_links(entry)
+        or _image_from_image_field(entry)
+    )
+
+
 def build_article_id(source_name: str, url: str, title: str) -> str:
+    """Stable id for cross-run identity (e.g. delivery-history lookups): a
+    truncated hash of source+url+title, so the same story from the same feed
+    produces the same id run over run."""
     payload = f"{source_name}|{url}|{title.lower().strip()}".encode("utf-8", errors="ignore")
     return hashlib.sha256(payload).hexdigest()[:24]
 
 
 def dedupe_articles(articles: list[Article]) -> list[Article]:
+    """Collapse exact-URL duplicates (e.g. cross-posted to multiple feeds), keeping
+    the newest copy and tracking how many were merged in `duplicate_count`."""
     deduped: dict[str, Article] = {}
     for article in articles:
         key = normalize_url(article.url)
@@ -132,19 +159,13 @@ class RSSClient:
 
     async def fetch_source(self, client: httpx.AsyncClient, source: SourceConfig) -> list[Article]:
         headers = {"User-Agent": self.settings.user_agent}
-        response = await client.get(source.rss, headers=headers)
-        response.raise_for_status()
-
-        # Content-Length is advisory: absent for chunked transfer, multi-value
-        # ("1000, 1000") when proxies join headers, or non-numeric on misbehaving
-        # servers. Only honor a single decimal value; otherwise proceed (the
-        # body is already in memory by now).
-        content_length = response.headers.get("content-length")
-        if content_length is not None and content_length.isdecimal() and int(content_length) > _MAX_FEED_BYTES:
+        try:
+            response = await get_capped(client, source.rss, headers, _MAX_FEED_BYTES)
+        except ResponseTooLargeError:
             logger.warning(
-                "Skipping source %s: feed response too large (%s bytes)",
+                "Skipping source %s: feed response too large (>%s bytes)",
                 source.name,
-                content_length,
+                _MAX_FEED_BYTES,
             )
             return []
 
@@ -185,7 +206,11 @@ class RSSClient:
         timeout = httpx.Timeout(self.settings.request_timeout_seconds)
         semaphore = asyncio.Semaphore(self.settings.http_concurrency)
 
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            follow_redirects=True,
+            event_hooks={"request": [reject_private_network_requests]},
+        ) as client:
             async def worker(source: SourceConfig) -> tuple[list[Article], str | None]:
                 try:
                     async with semaphore:

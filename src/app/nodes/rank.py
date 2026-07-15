@@ -10,6 +10,7 @@ from app.services.history import delivered_titles, filter_previously_delivered, 
 from app.services.openrouter_client import OpenRouterClient
 from app.services.scoring import article_sort_key, rank_articles
 from app.services.tracing import traceable
+from app.utils import resolve_reference_now
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +24,10 @@ def filter_articles_published_today(
     articles: list[Article],
     now: datetime | None = None,
 ) -> list[Article]:
-    reference_now = now if now is not None else datetime.now().astimezone()
-    if reference_now.tzinfo is None:
-        reference_now = reference_now.replace(tzinfo=timezone.utc)
+    """Keep only articles whose published_at falls on today's date in `now`'s
+    timezone (defaults to local time). Articles with no published_at are dropped
+    rather than assumed current."""
+    reference_now = resolve_reference_now(now)
     local_tz = reference_now.tzinfo
     today = reference_now.date()
 
@@ -44,6 +46,10 @@ def filter_articles_published_today(
 
 @traceable(name="rank_node")
 async def rank_node(state: AgentState) -> AgentState:
+    """Filter to today's not-previously-delivered articles, cluster+score them
+    deterministically, optionally blend in one batched LLM relevance call over
+    the top pool, then cut to the run limit. Also stashes the loaded delivery
+    history in state so deliver_node doesn't have to re-read it from disk."""
     settings = get_settings()
     dry_run = bool(state.get("dry_run", False))
 
@@ -93,6 +99,7 @@ async def rank_node(state: AgentState) -> AgentState:
 
     next_state = copy_state(state)
     next_state["articles_selected"] = serialize_articles(selected)
+    next_state["delivery_history"] = history
     if llm_error:
         merge_errors(next_state, [llm_error])
 

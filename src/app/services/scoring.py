@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
+from typing import NamedTuple
 
 from app.schemas.article import Article
 from app.services.scoring_keywords import (
@@ -60,6 +61,18 @@ def _normalize_text(value: str) -> str:
 
 def _tokenize(value: str) -> set[str]:
     return {token for token in _WORD_RE.findall(value.lower()) if token not in STOPWORDS}
+
+
+class _TitleSignature(NamedTuple):
+    """Precomputed normalize+tokenize result for a title, so title-similarity
+    comparisons (clustering, novelty scoring) don't redo this work per comparison."""
+
+    normalized: str
+    tokens: frozenset[str]
+
+
+def _title_signature(title: str) -> _TitleSignature:
+    return _TitleSignature(normalized=_normalize_text(title), tokens=frozenset(_tokenize(title)))
 
 
 def _source_weight(source_name: str) -> float:
@@ -136,32 +149,25 @@ def _recency_score(published_at: datetime | None) -> float:
     return 0.2
 
 
-def _title_similarity(left: str, right: str) -> float:
-    left_norm = _normalize_text(left)
-    right_norm = _normalize_text(right)
-    if not left_norm or not right_norm:
+def _title_similarity(left: _TitleSignature, right: _TitleSignature) -> float:
+    if not left.normalized or not right.normalized:
         return 0.0
 
-    left_tokens = _tokenize(left_norm)
-    right_tokens = _tokenize(right_norm)
-    union = left_tokens | right_tokens
+    union = left.tokens | right.tokens
     if not union:
         return 0.0
 
-    jaccard = len(left_tokens & right_tokens) / len(union)
-    sequence = SequenceMatcher(None, left_norm, right_norm).ratio()
+    jaccard = len(left.tokens & right.tokens) / len(union)
+    sequence = SequenceMatcher(None, left.normalized, right.normalized).ratio()
 
     return (0.65 * jaccard) + (0.35 * sequence)
 
 
-def _novelty_score(article: Article, recent_titles: list[str] | None) -> float:
+def _novelty_score(signature: _TitleSignature, recent_signatures: list[_TitleSignature] | None) -> float:
     """1.0 = unseen story; approaches 0.0 as the title matches recently delivered ones."""
-    if not recent_titles:
+    if not recent_signatures:
         return 1.0
-    # O(recent_titles); acceptable at current history scale (~14 days).
-    max_similarity = max(
-        _title_similarity(article.effective_title, title) for title in recent_titles
-    )
+    max_similarity = max(_title_similarity(signature, other) for other in recent_signatures)
     return max(0.0, 1.0 - max_similarity)
 
 
@@ -172,16 +178,19 @@ def _is_time_aligned(left: datetime | None, right: datetime | None, max_hours: i
     return delta <= max_hours
 
 
-def _same_story(left: Article, right: Article) -> bool:
-    left_tokens = _tokenize(left.effective_title)
-    right_tokens = _tokenize(right.effective_title)
-    overlap_count = len(left_tokens & right_tokens)
+def _same_story(left: Article, right: Article, signatures: dict[str, _TitleSignature]) -> bool:
+    """True if two articles look like the same story: either a strong title match
+    on its own, or a moderate match that's also time-aligned (guards against two
+    unrelated stories with generic, overlapping wording matching by coincidence)."""
+    left_signature = signatures[left.id]
+    right_signature = signatures[right.id]
+    overlap_count = len(left_signature.tokens & right_signature.tokens)
     if overlap_count < 2:
         return False
 
-    min_token_count = max(min(len(left_tokens), len(right_tokens)), 1)
+    min_token_count = max(min(len(left_signature.tokens), len(right_signature.tokens)), 1)
     overlap_ratio = overlap_count / min_token_count
-    title_similarity = _title_similarity(left.effective_title, right.effective_title)
+    title_similarity = _title_similarity(left_signature, right_signature)
     if title_similarity >= 0.78 and overlap_ratio >= 0.5:
         return True
 
@@ -200,7 +209,12 @@ def article_sort_key(article: Article) -> tuple[float, datetime]:
     return (article.score or 0.0, article.published_at or _DATETIME_MIN_UTC)
 
 
-def cluster_articles(articles: list[Article]) -> list[StoryCluster]:
+def cluster_articles(articles: list[Article], signatures: dict[str, _TitleSignature]) -> list[StoryCluster]:
+    """Group same-story articles via a token→cluster index (avoids O(n²) pairwise checks).
+
+    Processes newest-first; each article is only compared against clusters that
+    already share at least one title token with it (candidates), via _same_story.
+    """
     ordered = sorted(
         articles,
         key=lambda item: item.published_at or _DATETIME_MIN_UTC,
@@ -210,7 +224,7 @@ def cluster_articles(articles: list[Article]) -> list[StoryCluster]:
     clusters: list[StoryCluster] = []
     token_to_cluster_indices: dict[str, list[int]] = {}
     for article in ordered:
-        article_tokens = _tokenize(article.effective_title)
+        article_tokens = signatures[article.id].tokens
         candidate_indices: set[int] = set()
         for token in article_tokens:
             candidate_indices.update(token_to_cluster_indices.get(token, []))
@@ -218,7 +232,7 @@ def cluster_articles(articles: list[Article]) -> list[StoryCluster]:
         matched_cluster: StoryCluster | None = None
         for idx in sorted(candidate_indices):
             representative = clusters[idx].members[0]
-            if _same_story(article, representative):
+            if _same_story(article, representative, signatures):
                 matched_cluster = clusters[idx]
                 break
 
@@ -235,15 +249,18 @@ def cluster_articles(articles: list[Article]) -> list[StoryCluster]:
 
 def score_article(
     article: Article,
+    signature: _TitleSignature,
     cluster_size: int = 1,
-    recent_titles: list[str] | None = None,
+    recent_signatures: list[_TitleSignature] | None = None,
 ) -> float:
+    """Weighted 0-1 blend of relevance/recency/source/duplication/cluster/novelty
+    signals (see the blend comment below for the rationale behind the weights)."""
     relevance = _relevance_score(article)
     recency = _recency_score(article.published_at)
     source_weight = _source_weight(article.source_name)
     duplication_signal = min(article.duplicate_count / 5.0, 1.0)
     cluster_signal = min(max(cluster_size, 1) / 5.0, 1.0)
-    novelty = _novelty_score(article, recent_titles)
+    novelty = _novelty_score(signature, recent_signatures)
 
     # Hand-tuned blend: keyword relevance dominates, freshness second; source
     # reputation and cross-feed corroboration adjust the middle; novelty is a
@@ -315,8 +332,15 @@ def rank_articles(
     max_per_source: int | None = None,
     backfill_penalty: float = 0.05,
 ) -> list[Article]:
+    """Cluster same-story coverage, score one representative per cluster, then cut
+    to `limit` (optionally capping per-source with a penalized backfill pass so a
+    quiet day can still reach the limit — see _select_with_source_cap /
+    _backfill_past_cap). Does not mutate `articles`; returns copies."""
     candidates = [article.model_copy(deep=True) for article in articles]
-    story_clusters = cluster_articles(candidates)
+    title_signatures = {article.id: _title_signature(article.effective_title) for article in candidates}
+    recent_signatures = [_title_signature(title) for title in (recent_titles or [])]
+
+    story_clusters = cluster_articles(candidates, title_signatures)
 
     representatives: list[Article] = []
     for cluster in story_clusters:
@@ -326,8 +350,9 @@ def rank_articles(
             member.cluster_size = cluster_size
             member.score = score_article(
                 member,
+                title_signatures[member.id],
                 cluster_size=cluster_size,
-                recent_titles=recent_titles,
+                recent_signatures=recent_signatures,
             )
 
         representatives.append(max(cluster.members, key=article_sort_key))

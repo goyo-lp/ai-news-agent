@@ -14,4 +14,7 @@ except Exception:  # pragma: no cover
 
 
 def traceable(*args: Any, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """LangSmith's @traceable decorator, or a no-op passthrough if langsmith isn't
+    installed — lets every node use the same decorator regardless of whether
+    observability is configured."""
     return _traceable(*args, **kwargs)  # type: ignore[no-any-return]

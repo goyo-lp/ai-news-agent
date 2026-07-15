@@ -9,3 +9,13 @@ def test_build_telegram_caption_has_link_and_limit() -> None:
     )
     assert caption.startswith('<a href="https://example.com/a">')
     assert len(caption) <= TELEGRAM_CAPTION_LIMIT
+
+
+def test_build_telegram_caption_rejects_non_http_scheme() -> None:
+    caption = build_telegram_caption(
+        url="javascript:alert(1)",
+        title="Malicious Title",
+        summary="Summary text.",
+    )
+    assert caption.startswith('<a href="#">')
+    assert "javascript:" not in caption

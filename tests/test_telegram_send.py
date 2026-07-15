@@ -76,6 +76,29 @@ async def test_post_with_retry_malformed_response_returns_error() -> None:
     assert "bad" in str(result.get("description", ""))
 
 
+async def test_post_with_retry_redacts_token_from_exception_message() -> None:
+    token = "supersecrettoken123"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(f"failed for url https://api.telegram.org/bot{token}/sendMessage")
+
+    telegram = TelegramClient(
+        Settings(
+            _env_file=None,
+            telegram_bot_token=token,
+            telegram_chat_id="c",
+            request_timeout_seconds=10,
+        )
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await telegram._post_with_retry(http, "sendMessage", {"chat_id": "c"})
+
+    description = str(result.get("description", ""))
+    assert result["ok"] is False
+    assert token not in description
+    assert "***" in description
+
+
 async def test_post_with_retry_exhausts_three_attempts() -> None:
     calls = {"n": 0}
 
