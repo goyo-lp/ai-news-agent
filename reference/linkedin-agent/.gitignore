@@ -1,0 +1,52 @@
+# Python virtual env and caches
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+pip-wheel-metadata/
+
+# Tool caches and coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage/
+coverage.xml
+htmlcov/
+
+# Build and generated artifacts
+build/
+dist/
+outputs/
+data/style_profile.json
+
+# Environment files and secrets
+.env
+.env.*
+*.env
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.cert
+credentials.*
+secrets.*
+
+# Node/front-end artifacts (if added later)
+node_modules/
+.next/
+.turbo/
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local logs
+*.log

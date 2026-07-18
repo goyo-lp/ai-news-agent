@@ -1,0 +1,92 @@
+[
+  {
+    "topic_id": "c3b2be1142ff3a49adf50da3",
+    "title": "Open-source agent framework introduces A2A protocol for enterprise workflow orchestration (1)",
+    "summary_hint": "The release details protocol-level changes, context transfer semantics, and deployment tradeoffs.",
+    "primary_url": "https://techcrunch.com/a2a-framework?id=0",
+    "primary_domain": "techcrunch.com",
+    "published_at": "2026-03-03T03:26:12.124530Z",
+    "score": 0.98129,
+    "cluster_size": 10,
+    "rationale": "high-signal, multi-source, tier-1",
+    "supporting_urls": [
+      "https://techcrunch.com/a2a-framework?id=0",
+      "https://techcrunch.com/a2a-framework?id=5",
+      "https://techcrunch.com/a2a-framework?id=10",
+      "https://techcrunch.com/a2a-framework?id=15",
+      "https://techcrunch.com/a2a-framework?id=20"
+    ]
+  },
+  {
+    "topic_id": "ce184d339230b3d4ada2aa26",
+    "title": "Research team benchmarks hybrid retrieval + memory routing for long-horizon agents (2)",
+    "summary_hint": "The paper compares latency, cost, and failure modes across routing strategies.",
+    "primary_url": "https://www.technologyreview.com/hybrid-retrieval-memory?id=1",
+    "primary_domain": "technologyreview.com",
+    "published_at": "2026-03-03T03:26:12.124530Z",
+    "score": 0.85729,
+    "cluster_size": 10,
+    "rationale": "high-signal, multi-source, tier-1",
+    "supporting_urls": [
+      "https://www.technologyreview.com/hybrid-retrieval-memory?id=1",
+      "https://www.technologyreview.com/hybrid-retrieval-memory?id=6",
+      "https://www.technologyreview.com/hybrid-retrieval-memory?id=11",
+      "https://www.technologyreview.com/hybrid-retrieval-memory?id=16",
+      "https://www.technologyreview.com/hybrid-retrieval-memory?id=21"
+    ]
+  },
+  {
+    "topic_id": "b43233591c9af4593b28b215",
+    "title": "Enterprise tooling update improves agent observability with trace-level replay (4)",
+    "summary_hint": "The tooling shows step replay, guardrail events, and regression triage workflow.",
+    "primary_url": "https://deepmind.google/discover/blog/agent-observability/?id=3",
+    "primary_domain": "deepmind.google",
+    "published_at": "2026-03-03T03:26:12.124530Z",
+    "score": 0.79171,
+    "cluster_size": 10,
+    "rationale": "high-signal, multi-source, tier-1",
+    "supporting_urls": [
+      "https://deepmind.google/discover/blog/agent-observability/?id=3",
+      "https://deepmind.google/discover/blog/agent-observability/?id=8",
+      "https://deepmind.google/discover/blog/agent-observability/?id=13",
+      "https://deepmind.google/discover/blog/agent-observability/?id=18",
+      "https://deepmind.google/discover/blog/agent-observability/?id=23"
+    ]
+  },
+  {
+    "topic_id": "819cfea236f78fd55e6d9ea9",
+    "title": "Model serving stack adds dynamic context window management for multi-step reasoning (3)",
+    "summary_hint": "Engineers describe token budgeting, cache invalidation, and eval outcomes.",
+    "primary_url": "https://openai.com/news/context-window-mgmt?id=2",
+    "primary_domain": "openai.com",
+    "published_at": "2026-03-03T03:26:12.124530Z",
+    "score": 0.61286,
+    "cluster_size": 10,
+    "rationale": "high-signal, multi-source, tier-1",
+    "supporting_urls": [
+      "https://openai.com/news/context-window-mgmt?id=2",
+      "https://openai.com/news/context-window-mgmt?id=7",
+      "https://openai.com/news/context-window-mgmt?id=12",
+      "https://openai.com/news/context-window-mgmt?id=17",
+      "https://openai.com/news/context-window-mgmt?id=22"
+    ]
+  },
+  {
+    "topic_id": "4a71cfff5cdaea173f4c9910",
+    "title": "New eval harness reports reliability gaps in autonomous task decomposition (5)",
+    "summary_hint": "Coverage includes benchmark design, scoring methodology, and practical mitigations.",
+    "primary_url": "https://huggingface.co/blog/eval-harness?id=4",
+    "primary_domain": "huggingface.co",
+    "published_at": "2026-03-03T03:26:12.124530Z",
+    "score": 0.54014,
+    "cluster_size": 10,
+    "rationale": "high-signal, multi-source, tier-1",
+    "supporting_urls": [
+      "https://huggingface.co/blog/eval-harness?id=4",
+      "https://huggingface.co/blog/eval-harness?id=9",
+      "https://huggingface.co/blog/eval-harness?id=14",
+      "https://huggingface.co/blog/eval-harness?id=19",
+      "https://huggingface.co/blog/eval-harness?id=24"
+    ]
+  }
+]

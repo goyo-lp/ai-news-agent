@@ -1,0 +1,147 @@
+fetch_defaults:
+  image_fallback_rss_enclosure: true
+  requires_user_agent: true
+  blocked_domains: []
+
+sources:
+  - name: "TLDR AI"
+    url: "https://tldr.tech/ai"
+    rss: "https://tldr.tech/api/rss/ai"
+
+  - name: "TechCrunch (AI)"
+    url: "https://techcrunch.com/category/artificial-intelligence/"
+    rss: "https://techcrunch.com/category/artificial-intelligence/feed/"
+
+  - name: "The Verge (AI)"
+    url: "https://www.theverge.com/ai-artificial-intelligence"
+    rss: "https://www.theverge.com/rss/ai/index.xml"
+
+  - name: "Wired (AI)"
+    url: "https://www.wired.com/tag/artificial-intelligence/"
+    rss: "https://www.wired.com/feed/tag/ai/latest/rss"
+
+  - name: "MIT Technology Review"
+    url: "https://www.technologyreview.com/topic/artificial-intelligence/"
+    rss: "https://www.technologyreview.com/topic/artificial-intelligence/feed/"
+
+  - name: "VentureBeat (AI)"
+    url: "https://venturebeat.com/category/ai/"
+    rss: "https://venturebeat.com/feed/"
+
+  - name: "ZDNet (AI)"
+    url: "https://www.zdnet.com/topic/artificial-intelligence/"
+    rss: "https://www.zdnet.com/topic/artificial-intelligence/rss.xml"
+
+  - name: "The Guardian (AI)"
+    url: "https://www.theguardian.com/technology/artificialintelligenceai"
+    rss: "https://www.theguardian.com/technology/artificialintelligenceai/rss"
+
+  - name: "OpenAI Blog"
+    url: "https://openai.com/news/"
+    rss: "https://openai.com/news/rss.xml"
+
+  - name: "Google DeepMind Blog"
+    url: "https://deepmind.google/discover/blog/"
+    rss: "https://deepmind.google/blog/rss.xml"
+
+  - name: "BAIR Blog (Berkeley)"
+    url: "https://bair.berkeley.edu/blog/"
+    rss: "https://bair.berkeley.edu/blog/feed.xml"
+
+  - name: "NVIDIA Blog (AI)"
+    url: "https://blogs.nvidia.com/blog/category/ai/"
+    rss: "https://blogs.nvidia.com/feed/"
+
+  - name: "AWS Machine Learning Blog"
+    url: "https://aws.amazon.com/blogs/machine-learning/"
+    rss: "https://aws.amazon.com/blogs/machine-learning/feed/"
+
+  - name: "Apple Machine Learning Journal"
+    url: "https://machinelearning.apple.com/"
+    rss: "https://machinelearning.apple.com/rss.xml"
+
+  - name: "AI News"
+    url: "https://www.artificialintelligence-news.com/"
+    rss: "https://www.artificialintelligence-news.com/feed/"
+
+  - name: "AI Business"
+    url: "https://aibusiness.com/"
+    rss: "https://aibusiness.com/feed"
+
+  - name: "AI Magazine"
+    url: "https://www.ai-magazine.com/"
+    rss: "https://www.ai-magazine.com/feed"
+
+  - name: "KDNuggets"
+    url: "https://www.kdnuggets.com/"
+    rss: "https://www.kdnuggets.com/feed"
+
+  - name: "Towards Data Science"
+    url: "https://towardsdatascience.com/tagged/artificial-intelligence"
+    rss: "https://towardsdatascience.com/feed"
+
+  - name: "Machine Learning Mastery"
+    url: "https://machinelearningmastery.com/blog/"
+    rss: "https://machinelearningmastery.com/blog/feed/"
+
+  - name: "Unite.AI"
+    url: "https://www.unite.ai/artificial-intelligence/"
+    rss: "https://www.unite.ai/feed/"
+
+  - name: "MarkTechPost"
+    url: "https://www.marktechpost.com/"
+    rss: "https://www.marktechpost.com/feed/"
+
+  - name: "Analytics Vidhya"
+    url: "https://www.analyticsvidhya.com/blog/category/ai/"
+    rss: "https://www.analyticsvidhya.com/feed/"
+
+  - name: "InfoQ (AI/ML)"
+    url: "https://www.infoq.com/ai-ml-data-eng/"
+    rss: "https://feed.infoq.com/ai-ml-data-eng"
+
+  - name: "arXiv.org (cs.AI)"
+    url: "https://arxiv.org/list/cs.AI/recent"
+    rss: "http://export.arxiv.org/rss/cs.AI"
+    fetch_overrides:
+      blocked_domains:
+        - "arxiv.org"
+
+  - name: "Hugging Face (Blog)"
+    url: "https://huggingface.co/blog"
+    rss: "https://huggingface.co/blog/feed.xml"
+
+  - name: "ScienceDaily (AI)"
+    url: "https://www.sciencedaily.com/news/computers_math/artificial_intelligence/"
+    rss: "https://www.sciencedaily.com/rss/computers_math/artificial_intelligence.xml"
+
+  - name: "MIT News (AI)"
+    url: "https://news.mit.edu/topic/artificial-intelligence2"
+    rss: "https://news.mit.edu/rss/topic/artificial-intelligence2"
+
+  - name: "Reddit r/MachineLearning"
+    url: "https://www.reddit.com/r/MachineLearning/"
+    rss: "https://www.reddit.com/r/MachineLearning/.rss"
+    fetch_overrides:
+      requires_user_agent: true
+
+  - name: "Reddit r/artificial"
+    url: "https://www.reddit.com/r/artificial/"
+    rss: "https://www.reddit.com/r/artificial/.rss"
+    fetch_overrides:
+      requires_user_agent: true
+
+  - name: "Hacker News (AI)"
+    url: "https://news.ycombinator.com/"
+    rss: "https://hnrss.org/newest?q=artificial+intelligence"
+    fetch_overrides:
+      blocked_domains:
+        - "news.ycombinator.com"
+
+  - name: "LessWrong (AI)"
+    url: "https://www.lesswrong.com/tag/artificial-intelligence"
+    rss: "https://www.lesswrong.com/tag/artificial-intelligence/feed.xml"
+
+  - name: "Kaggle (Blog)"
+    url: "https://medium.com/kaggle-blog"
+    rss: "https://medium.com/feed/kaggle-blog"

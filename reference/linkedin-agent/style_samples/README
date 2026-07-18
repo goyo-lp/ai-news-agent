@@ -1,0 +1,8 @@
+Place your writing samples here.
+
+Supported formats:
+- .txt
+- .md
+- .jsonl (with text/content/post fields)
+
+These files are used to build `data/style_profile.json`.

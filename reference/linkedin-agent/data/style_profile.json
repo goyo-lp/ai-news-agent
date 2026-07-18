@@ -1,0 +1,46 @@
+{
+  "sample_count": 8,
+  "sentence_count": 76,
+  "avg_sentence_words": 18.74,
+  "common_openers": [
+    "after a",
+    "this will",
+    "yesterday i",
+    "operational efficiency",
+    "what a",
+    "june graduated",
+    "go tritons",
+    "summer learned"
+  ],
+  "vocabulary": [
+    "will",
+    "data",
+    "business",
+    "real",
+    "estate",
+    "development",
+    "analytics",
+    "can",
+    "carnegie",
+    "mellon",
+    "university",
+    "but",
+    "things",
+    "i'm",
+    "more",
+    "without",
+    "had",
+    "how",
+    "believe",
+    "hashtag"
+  ],
+  "tone_traits": [
+    "curious",
+    "personal",
+    "analytical",
+    "concise"
+  ],
+  "cta_patterns": [
+    "What are you seeing in your team?"
+  ]
+}

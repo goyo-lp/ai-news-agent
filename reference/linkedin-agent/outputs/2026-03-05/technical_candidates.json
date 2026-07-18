@@ -1,0 +1,72 @@
+[
+  {
+    "topic_id": "5a247c40534d50248d9c16d9",
+    "title": "From Conflict to Consensus: Boosting Medical Reasoning via Multi-Round Agentic RAG",
+    "summary_hint": "arXiv:2603.03292v1 Announce Type: cross Abstract: Large Language Models (LLMs) exhibit high reasoning capacity in medical question-answering, but their tendency to produce hallucinations and outdated knowledge poses critical risks in healthcare fields. While R",
+    "primary_url": "https://arxiv.org/abs/2603.03292",
+    "primary_domain": "arxiv.org",
+    "published_at": "2026-03-05T05:00:00Z",
+    "score": 0.89821,
+    "cluster_size": 1,
+    "rationale": "high-signal, single-source, tier-1",
+    "supporting_urls": [
+      "https://arxiv.org/abs/2603.03292"
+    ]
+  },
+  {
+    "topic_id": "f94030a4bc30f6942de468ed",
+    "title": "LifeBench: A Benchmark for Long-Horizon Multi-Source Memory",
+    "summary_hint": "arXiv:2603.03781v1 Announce Type: new Abstract: Long-term memory is fundamental for personalized agents capable of accumulating knowledge, reasoning over user experiences, and adapting across time. However, existing memory benchmarks primarily target declarati",
+    "primary_url": "https://arxiv.org/abs/2603.03781",
+    "primary_domain": "arxiv.org",
+    "published_at": "2026-03-05T05:00:00Z",
+    "score": 0.8875,
+    "cluster_size": 1,
+    "rationale": "high-signal, single-source, tier-1",
+    "supporting_urls": [
+      "https://arxiv.org/abs/2603.03781"
+    ]
+  },
+  {
+    "topic_id": "7cc8a92877da81a1b02fb468",
+    "title": "AI4S-SDS: A Neuro-Symbolic Solvent Design System via Sparse MCTS and Differentiable Physics Alignment",
+    "summary_hint": "arXiv:2603.03686v1 Announce Type: new Abstract: Automated design of chemical formulations is a cornerstone of materials science, yet it requires navigating a high-dimensional combinatorial space involving discrete compositional choices and continuous geometric",
+    "primary_url": "https://arxiv.org/abs/2603.03686",
+    "primary_domain": "arxiv.org",
+    "published_at": "2026-03-05T05:00:00Z",
+    "score": 0.84693,
+    "cluster_size": 1,
+    "rationale": "high-signal, single-source, tier-1",
+    "supporting_urls": [
+      "https://arxiv.org/abs/2603.03686"
+    ]
+  },
+  {
+    "topic_id": "4227659683ce599741d57a07",
+    "title": "RAGNav: A Retrieval-Augmented Topological Reasoning Framework for Multi-Goal Visual-Language Navigation",
+    "summary_hint": "arXiv:2603.03745v1 Announce Type: new Abstract: Vision-Language Navigation (VLN) is evolving from single-point pathfinding toward the more challenging Multi-Goal VLN. This task requires agents to accurately identify multiple entities while collaboratively reas",
+    "primary_url": "https://arxiv.org/abs/2603.03745",
+    "primary_domain": "arxiv.org",
+    "published_at": "2026-03-05T05:00:00Z",
+    "score": 0.83979,
+    "cluster_size": 1,
+    "rationale": "high-signal, single-source, tier-1",
+    "supporting_urls": [
+      "https://arxiv.org/abs/2603.03745"
+    ]
+  },
+  {
+    "topic_id": "43f24924de9e27a09c652bf0",
+    "title": "IntPro: A Proxy Agent for Context-Aware Intent Understanding via Retrieval-conditioned Inference",
+    "summary_hint": "arXiv:2603.03325v1 Announce Type: cross Abstract: Large language models (LLMs) have become integral to modern Human-AI collaboration workflows, where accurately understanding user intent serves as a crucial step for generating satisfactory responses. Context-a",
+    "primary_url": "https://arxiv.org/abs/2603.03325",
+    "primary_domain": "arxiv.org",
+    "published_at": "2026-03-05T05:00:00Z",
+    "score": 0.77779,
+    "cluster_size": 1,
+    "rationale": "high-signal, single-source, tier-1",
+    "supporting_urls": [
+      "https://arxiv.org/abs/2603.03325"
+    ]
+  }
+]
