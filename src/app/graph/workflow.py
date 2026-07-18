@@ -47,15 +47,11 @@ def route_after_rank(state: AgentState) -> str:
     return "summarize" if state.get("articles_selected") else END
 
 
-def build_workflow() -> Any:
-    """Assemble and compile the 5-node pipeline: ingest -> enrich -> rank ->
-    (summarize -> deliver | END). Each node shares the same retry policy and a
-    pinned error handler; rank has a conditional early exit (route_after_rank)
-    when nothing survives filtering."""
-    graph = StateGraph(AgentState)
-
-    retry = _retry_policy()
-
+def _add_core_nodes(graph: StateGraph, retry: RetryPolicy) -> None:
+    """Register the shared curation prefix: ingest -> enrich -> rank ->
+    summarize. Used by build_workflow (which continues on to deliver) and
+    build_curation_workflow (which stops here), so the two pipelines can't
+    drift apart."""
     graph.add_node(
         "ingest",
         ingest_node,
@@ -84,6 +80,22 @@ def build_workflow() -> Any:
         timeout=timedelta(seconds=120),
         error_handler=_node_error_handler,
     )
+
+    graph.set_entry_point("ingest")
+    graph.add_edge("ingest", "enrich")
+    graph.add_edge("enrich", "rank")
+    graph.add_conditional_edges("rank", route_after_rank, {"summarize": "summarize", END: END})
+
+
+def build_workflow() -> Any:
+    """Assemble and compile the 5-node pipeline: ingest -> enrich -> rank ->
+    (summarize -> deliver | END). Each node shares the same retry policy and a
+    pinned error handler; rank has a conditional early exit (route_after_rank)
+    when nothing survives filtering."""
+    graph = StateGraph(AgentState)
+    retry = _retry_policy()
+
+    _add_core_nodes(graph, retry)
     graph.add_node(
         "deliver",
         deliver_node,
@@ -91,12 +103,21 @@ def build_workflow() -> Any:
         timeout=timedelta(seconds=90),
         error_handler=_node_error_handler,
     )
-
-    graph.set_entry_point("ingest")
-    graph.add_edge("ingest", "enrich")
-    graph.add_edge("enrich", "rank")
-    graph.add_conditional_edges("rank", route_after_rank, {"summarize": "summarize", END: END})
     graph.add_edge("summarize", "deliver")
     graph.add_edge("deliver", END)
+
+    return graph.compile()
+
+
+def build_curation_workflow() -> Any:
+    """Assemble and compile the curation-only pipeline: ingest -> enrich -> rank
+    -> summarize, stopping before deliver. Used by run_curation() to produce
+    structured articles for the orchestrator without sending anything; the
+    full pipeline (build_workflow, deliver included) is untouched."""
+    graph = StateGraph(AgentState)
+    retry = _retry_policy()
+
+    _add_core_nodes(graph, retry)
+    graph.add_edge("summarize", END)
 
     return graph.compile()
