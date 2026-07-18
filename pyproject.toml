@@ -42,10 +42,14 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 asyncio_mode = "auto"
+# reference/ is a vendored snapshot of the LinkedIn agent (porting reference),
+# not part of this app's build; keep it out of test collection.
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = ["reference"]
 
 [tool.mypy]
 python_version = "3.11"
