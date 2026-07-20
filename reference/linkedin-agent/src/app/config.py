@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    app_name: str = "ai-linked-imposting-agent"
+    app_name: str = "ai-linked-posting-agent"
 
     tavily_api_key: str | None = None
     tavily_base_url: str = "https://api.tavily.com"
@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     openrouter_verifier_secondary_model: str | None = None
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_site_url: str | None = None
-    openrouter_app_name: str = "ai-linked-imposting-agent"
+    openrouter_app_name: str = "ai-linked-posting-agent"
     deep_agent_enabled: bool = True
     deep_agent_model: str = "anthropic/claude-haiku-4.5"
     deep_agent_timeout_seconds: int = 75
@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     request_timeout_seconds: int = 20
 
     langsmith_api_key: str | None = None
-    langsmith_project: str = "ai-linked-imposting-agent"
+    langsmith_project: str = "ai-linked-posting-agent"
     langsmith_tracing: bool = True
 
     langgraphics_enabled: bool = True
