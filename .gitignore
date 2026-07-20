@@ -34,3 +34,6 @@ graphify-out/
 *.log
 telegram-resized-image.png
 data/delivery-history.json
+
+# Local architecture diagrams (not tracked)
+architecture/

@@ -99,6 +99,9 @@ data/
 
 tests/
 └── unit tests
+
+reference/linkedin-agent/   # port kit only (not a second app); see PORT_MAP.md
+architecture/               # local diagrams only (gitignored)
 ```
 
 ## Setup
