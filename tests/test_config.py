@@ -38,17 +38,20 @@ def test_settings_rejects_unknown_ported_knobs() -> None:
     """A knob with no consumer is config dressed as code — the ported LinkedIn
     knobs must NOT silently exist on Settings before their consumer ships. This
     pins the contract so a future PR landing a consumer cannot accidentally let
-    extra pre-declared fields slip in."""
+    extra pre-declared fields slip in.
+
+    Stage A models and `max_topics_per_run` now have a consumer (the
+    technical_rank tool, P2.1); the remaining ported knobs (Stage B, Tavily,
+    deep-agent bounds, orchestration limits) stay deferred until their consumer
+    PRs land."""
     settings = Settings(_env_file=None)
     for removed in (
-        "openrouter_stage_a_model",
         "openrouter_stage_b_research_model",
         "openrouter_stage_b_writer_model",
         "tavily_api_key",
         "tavily_base_url",
         "deep_agent_enabled",
         "deep_agent_model",
-        "max_topics_per_run",
         "deep_research_topic_concurrency",
         "adaptive_investigation_concurrency",
         "telegram_send_concurrency",
@@ -57,6 +60,16 @@ def test_settings_rejects_unknown_ported_knobs() -> None:
         "style_samples_dir",
     ):
         assert not hasattr(settings, removed), f"{removed} should not be on Settings yet"
+
+
+def test_stage_a_knobs_have_defaults() -> None:
+    """P2.1 lands the Stage A technical-ranker knobs with their consumer. They
+    default to the cheap/deterministic model from Decision J; no .env needed for
+    dry-run (the heuristic fallback fires when the OpenRouter key is absent)."""
+    settings = Settings(_env_file=None)
+    assert settings.openrouter_stage_a_model == "openai/gpt-oss-120b"
+    assert settings.openrouter_stage_a_secondary_model is None
+    assert settings.max_topics_per_run == 5
 
 
 def test_news_bot_profile_falls_back_to_legacy_credentials() -> None:
