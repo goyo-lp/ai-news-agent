@@ -122,7 +122,20 @@ class ResearchBrief(BaseModel):
     key_points: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
-    verification_status: Literal["unverified", "verified", "failed"] = "unverified"
+    # The five status values cover the full lifecycle the verify_claim tool
+    # (P2.4) emits plus the catastrophic-failure path a subagent can set:
+    #   unverified          brief produced but not yet verified
+    #   verified            BriefVerifier's model verdict: confident evidence
+    #   partially_verified  BriefVerifier's model verdict: weaker mix of evidence
+    #   insufficient_evidence BriefVerifier's model verdict OR a per-brief worker
+    #                       exception's cautious fallback
+    #   failed              catastrophic tool-level failure (kept as a valid
+    #                       value so callers can route a brief that never made
+    #                       it through the checker at all, and tests / delivery
+    #                       can branch on it without KeyError)
+    verification_status: Literal[
+        "unverified", "verified", "partially_verified", "insufficient_evidence", "failed"
+    ] = "unverified"
     verification_confidence: float = 0.0
     verification_notes: list[str] = Field(default_factory=list)
 

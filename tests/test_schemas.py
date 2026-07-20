@@ -98,6 +98,28 @@ def test_research_brief_verification_status_rejects_bogus() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "status",
+    ["unverified", "verified", "partially_verified", "insufficient_evidence", "failed"],
+)
+def test_research_brief_verification_status_accepts_full_lifecycle(status: str) -> None:
+    """P2.4 widens the verification_status enum to the BriefVerifier's actual
+    outputs (verified / partially_verified / insufficient_evidence) plus the
+    catastrophic-tool-failure sentinel (failed). All five must validate so the
+    verify_claim tool can write each one without a model validator tripping."""
+    brief = ResearchBrief(
+        topic_id="t1",
+        headline="h",
+        summary="s",
+        technical_significance="ts",
+        business_impact="bi",
+        why_now="wn",
+        verification_status=status,  # type: ignore[arg-type]
+        verification_confidence=0.5,
+    )
+    assert brief.verification_status == status
+
+
 def test_research_brief_round_trip() -> None:
     brief = ResearchBrief(
         topic_id="t1",

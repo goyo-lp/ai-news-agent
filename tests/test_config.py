@@ -40,10 +40,10 @@ def test_settings_rejects_unknown_ported_knobs() -> None:
     pins the contract so a future PR landing a consumer cannot accidentally let
     extra pre-declared fields slip in.
 
-    Stage A models + max_topics_per_run (P2.1 technical_rank) and Tavily knobs
-    (P2.3 tavily tools) now have consumers; the remaining ported knobs (Stage B,
-    deep-agent bounds, orchestration limits) stay deferred until their consumer
-    PRs land."""
+    Stage A models + max_topics_per_run (P2.1 technical_rank), Tavily knobs
+    (P2.3 tavily tools), and verifier knobs (P2.4 verify_claim) now have
+    consumers; the remaining ported knobs (Stage B, deep-agent bounds,
+    orchestration limits) stay deferred until their consumer PRs land."""
     settings = Settings(_env_file=None)
     for removed in (
         "openrouter_stage_b_research_model",
@@ -58,6 +58,19 @@ def test_settings_rejects_unknown_ported_knobs() -> None:
         "style_samples_dir",
     ):
         assert not hasattr(settings, removed), f"{removed} should not be on Settings yet"
+
+
+def test_verifier_knobs_have_defaults() -> None:
+    """P2.4 lands the verifier model + bounds with their consumer. The verifier
+    model is distinct from `openrouter_model` (the news summarizer) — the
+    reference had reused openrouter_model for both, silently coupling two
+    unrelated products. Ensemble / concurrency bounds default to single-model /
+    4-parallel."""
+    settings = Settings(_env_file=None)
+    assert settings.openrouter_verifier_model == "anthropic/claude-haiku-4.5"
+    assert settings.openrouter_verifier_secondary_model is None
+    assert settings.verification_concurrency == 4
+    assert settings.verification_sources_per_topic == 3
 
 
 def test_tavily_knobs_have_defaults() -> None:
