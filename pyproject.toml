@@ -42,13 +42,18 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 asyncio_mode = "auto"
+# reference/ is a LinkedIn port kit (schemas/services/style only), not a second
+# app; keep it out of test collection.
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = ["reference"]
 
 [tool.mypy]
 python_version = "3.11"
+exclude = ["reference/"]
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true

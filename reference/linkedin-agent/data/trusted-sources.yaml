@@ -1,0 +1,31 @@
+tiers:
+  tier1:
+    - openai.com
+    - deepmind.google
+    - anthropic.com
+    - technologyreview.com
+    - techcrunch.com
+    - theverge.com
+    - wired.com
+    - venturebeat.com
+    - nvidia.com
+    - aws.amazon.com
+    - machinelearning.apple.com
+    - huggingface.co
+    - arxiv.org
+    - mit.edu
+    - sciencedaily.com
+
+  tier2:
+    - zdnet.com
+    - theguardian.com
+    - aibusiness.com
+    - artificialintelligence-news.com
+    - ai-magazine.com
+    - infq.com
+    - infoq.com
+    - kdnuggets.com
+    - towardsdatascience.com
+    - unite.ai
+    - marktechpost.com
+    - analyticsvidhya.com

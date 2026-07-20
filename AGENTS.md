@@ -1,3 +1,8 @@
+## reference / architecture
+
+- `reference/linkedin-agent/` is a **port kit** (schemas, services, style samples), not a second app. See `reference/linkedin-agent/PORT_MAP.md`. Do not import it from host `src/app`.
+- `architecture/` is local-only (gitignored). Diagrams are not part of the repo.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
