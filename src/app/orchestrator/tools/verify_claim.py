@@ -1,0 +1,246 @@
+"""verify_claim — the coordinator's brief-fact-checking tool.
+
+Wraps :func:`app.orchestrator.services.brief_verifier.BriefVerifier.verify_one`
+to verify a single :class:`ResearchBrief` against independently gathered
+Tavily evidence + an OpenRouter fact-checking model. The research subagent
+(P4.1) invokes this once per brief it produces — the brief researched from
+the curated news (and possibly the fetched real article) is double-checked
+before it's handed to the writer subagent.
+
+Per guiding principle #3 the brief is the *artifact* on disk — it travels in
+both directions through this tool:
+  * input  : the research subagent writes ``briefs/<topic_id>.json`` to the
+            orchestrator data dir before calling the tool;
+  * output : the verified brief is written back to
+            ``briefs/<topic_id>.verified.json`` so the writer subagent and the
+            quality_gate tool read the post-verification copy.
+
+The tool returns a compressed summary: ``{topic_id, verification_status,
+verification_confidence, notes_count, path}`` — never the brief body. The
+status enum matches :class:`ResearchBrief.verification_status` (verified /
+partially_verified / insufficient_evidence / failed).
+
+Target environment: deepagents ``create_deep_agent`` — async-only tool, same
+pattern siblings as news / technical_rank / fetch_article / tavily.
+"""
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+from typing import Any
+
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
+
+from app.config import Settings, get_settings
+from app.orchestrator.schemas import ResearchBrief
+from app.orchestrator.services.brief_verifier import BriefVerifier
+
+logger = logging.getLogger(__name__)
+
+_BRIEFS_SUBDIR = "briefs"
+_VERIFIED_SUFFIX = ".verified.json"
+_BRIEF_SUFFIX = ".json"
+
+_VALID_STATUSES = {
+    "unverified",
+    "verified",
+    "partially_verified",
+    "insufficient_evidence",
+    "failed",
+}
+
+
+class VerifyClaimArgs(BaseModel):
+    """Tool input. `topic_id` identifies the brief file to load (looks up
+    ``briefs/<topic_id>.json`` in the orchestrator data dir). `hours_back`
+    defaults to the verifier's ~24h if not supplied."""
+
+    topic_id: str = Field(
+        ..., description="The brief's topic_id; the brief is read from briefs/<topic_id>.json."
+    )
+    hours_back: int | None = Field(
+        default=None,
+        description=(
+            "Hours back to search for corroborating evidence. Omit to use the "
+            "verifier's default (~24h, clamped to Tavily's [1, 7] days)."
+        ),
+    )
+
+
+def _brief_path(data_dir: str, topic_id: str, *, verified: bool = False) -> Path:
+    """Resolve the on-disk path for a brief, by topic_id. ``verified=True``
+    returns the post-verification copy (``briefs/<topic_id>.verified.json``)
+    — the artifact the writer subagent / quality_gate reads."""
+    if "/" in topic_id or topic_id in {"", ".", ".."}:
+        # Defense-in-depth against a model-supplied topic_id escaping the
+        # briefs/ subdir via path traversal. The caller can also see this
+        # reflected as `status=error` in the tool summary.
+        raise ValueError(f"Invalid topic_id: {topic_id!r}")
+    filename = f"{topic_id}{_VERIFIED_SUFFIX if verified else _BRIEF_SUFFIX}"
+    return Path(data_dir) / _BRIEFS_SUBDIR / filename
+
+
+def write_verified_brief_to_state(brief: ResearchBrief, data_dir: str) -> Path:
+    """Serialize a verified brief to ``briefs/<topic_id>.verified.json`` and
+    return the written path. Creates the dir if missing. Pure (no network):
+    testable with a tmp directory. Mirrors the news.py / technical_rank.py
+    writers — the on-disk shape round-trips through ``ResearchBrief``."""
+    if "/" in brief.topic_id or brief.topic_id in {"", ".", ".."}:
+        raise ValueError(f"Invalid topic_id: {brief.topic_id!r}")
+    path = _brief_path(data_dir, brief.topic_id, verified=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(brief.model_dump(mode="json"), indent=2, default=str),
+        encoding="utf-8",
+    )
+    logger.info(
+        "Wrote verified brief for %s (%s, conf=%.2f) to %s",
+        brief.topic_id,
+        brief.verification_status,
+        brief.verification_confidence,
+        path,
+    )
+    return path
+
+
+def read_brief_from_state(data_dir: str, topic_id: str) -> ResearchBrief:
+    """Load the pre-verification brief written by the research subagent into a
+    :class:`ResearchBrief`. Raises ``FileNotFoundError`` deliberately — a
+    missing brief is a real precondition error (the subagent skipped a write),
+    not silently empty content.
+
+    Re-validation through pydantic on load is the boundary check that catches
+    a brief on disk that drifted from the boundary contract (someone hand-edited
+    it, the writer produced a stale shape) before it reaches the verifier."""
+    path = _brief_path(data_dir, topic_id, verified=False)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return ResearchBrief.model_validate(payload)
+
+
+async def _verify_and_write(args: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    """Run the verifier on one brief and persist the verified copy. Returns a
+    compressed summary; the brief body never rides back through the LLM."""
+    raw_topic = str(args.get("topic_id") or "").strip()
+    if not raw_topic:
+        return {
+            "topic_id": "",
+            "verification_status": "failed",
+            "verification_confidence": 0.0,
+            "notes_count": 0,
+            "status": "error",
+            "reason": "topic_id is required",
+            "path": None,
+        }
+
+    try:
+        brief = read_brief_from_state(settings.orchestrator_data_dir, raw_topic)
+    except FileNotFoundError:
+        return {
+            "topic_id": raw_topic,
+            "verification_status": "failed",
+            "verification_confidence": 0.0,
+            "notes_count": 0,
+            "status": "error",
+            "reason": f"brief not found for topic_id {raw_topic!r}",
+            "path": None,
+        }
+    except ValueError as exc:
+        # Path-traversal defense _and_ pydantic validation drift on load.
+        return {
+            "topic_id": raw_topic,
+            "verification_status": "failed",
+            "verification_confidence": 0.0,
+            "notes_count": 0,
+            "status": "error",
+            "reason": str(exc),
+            "path": None,
+        }
+    except Exception as exc:
+        logger.warning("verify_claim brief load failed for %r: %s", raw_topic, exc)
+        return {
+            "topic_id": raw_topic,
+            "verification_status": "failed",
+            "verification_confidence": 0.0,
+            "notes_count": 0,
+            "status": "error",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "path": None,
+        }
+
+    hours_back_raw = args.get("hours_back")
+    hours_back = int(hours_back_raw) if hours_back_raw is not None else 24
+    dry_run = not (settings.openrouter_api_key or "").strip()
+
+    verifier = BriefVerifier(settings)
+    try:
+        verified = await verifier.verify_one(brief, hours_back=hours_back, dry_run=dry_run)
+    except Exception as exc:
+        # The verifier's per-brief worker already falls back inside, so a raise
+        # here is catastrophic. Record it as `failed` and never propagate into
+        # the agent loop.
+        logger.warning("verify_claim verifier raised for %r: %s", raw_topic, exc)
+        return {
+            "topic_id": raw_topic,
+            "verification_status": "failed",
+            "verification_confidence": 0.0,
+            "notes_count": 0,
+            "status": "error",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "path": None,
+        }
+
+    path = write_verified_brief_to_state(verified, settings.orchestrator_data_dir)
+    status = verified.verification_status
+    if status not in _VALID_STATUSES:
+        # Catch a verifier that emits something the enum doesn't recognize —
+        # surfaces distinctly rather than silently coercing.
+        logger.warning("verify_claim returned unknown status %r for %s", status, raw_topic)
+        status = "failed"
+
+    return {
+        "topic_id": raw_topic,
+        "verification_status": status,
+        "verification_confidence": round(float(verified.verification_confidence), 3),
+        "notes_count": len(verified.verification_notes),
+        "status": "ok",
+        "reason": None,
+        "path": str(path),
+    }
+
+
+def build_verify_claim_tool(settings: Settings | None = None) -> StructuredTool:
+    """Construct the verify_claim langchain tool."""
+    bound_settings = settings
+
+    async def _async(topic_id: str, hours_back: int | None = None) -> str:
+        s = bound_settings or get_settings()
+        result = await _verify_and_write(
+            {"topic_id": topic_id, "hours_back": hours_back}, s
+        )
+        return json.dumps(result, default=str)
+
+    return StructuredTool.from_function(
+        func=None,
+        coroutine=_async,
+        name="verify_claim",
+        description=(
+            "Verify one research brief (briefs/<topic_id>.json) against "
+            "independent Tavily evidence + an OpenRouter fact-checking model, "
+            "and write the post-verification brief to "
+            "briefs/<topic_id>.verified.json. Returns a JSON summary with "
+            "{topic_id, verification_status, verification_confidence, "
+            "notes_count, status, reason, path} — never the brief body. Read "
+            "the verified brief from `path` when `status == \"ok\"`. "
+            "`verification_status` is one of "
+            "verified | partially_verified | insufficient_evidence | failed. "
+            "Falls back to a heuristic verdict (partially_verified) when "
+            "OPENROUTER_API_KEY is unset so a subagent can exercise this "
+            "without a live model key."
+        ),
+        args_schema=VerifyClaimArgs,
+    )
+
+
+verify_claim_tool = build_verify_claim_tool()

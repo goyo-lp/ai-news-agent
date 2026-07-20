@@ -69,6 +69,16 @@ class Settings(BaseSettings):
     tavily_time_range: str = "day"
     tavily_http_concurrency: int = 6
 
+    # Verifier model + bounds. Landed with their consumer — the verify_claim
+    # tool (P2.4). Distinct from `openrouter_model` (the news summarizer) so
+    # the verifier fact-checker doesn't silently couple to the news pipeline's
+    # model; the optional secondary drives the ensemble path (strictest-wins
+    # reconciliation).
+    openrouter_verifier_model: str = "anthropic/claude-haiku-4.5"
+    openrouter_verifier_secondary_model: str | None = None
+    verification_concurrency: int = 4
+    verification_sources_per_topic: int = 3
+
     # Per-subagent model / deep-agent / orchestration knobs live with their
     # consumer (P3.1 linkedin-voice, P4.* subagents, P5.* coordinator). They are
     # intentionally NOT pre-declared here: a knob with no consumer is config
