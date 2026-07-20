@@ -2,8 +2,31 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
+from typing import Literal
 
+from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Named Telegram destinations the process serves. Today there are exactly two
+# (Decision C in architecture/ai-news.html): `news` keeps the daily digest,
+# `linkedin` receives LinkedIn post proposals. The registry is closed so the
+# delivery layer can fail loudly on an unknown profile instead of silently
+# routing to the wrong chat (risk row in the plan).
+BotName = Literal["news", "linkedin"]
+_KNOWN_BOTS: tuple[BotName, ...] = ("news", "linkedin")
+
+
+class BotProfile(BaseModel):
+    """A single Telegram destination: one bot token + one chat id. Named
+    profiles live in settings so delivery routing is config-driven, not
+    hard-coded by call site."""
+
+    name: BotName
+    token: str
+    chat_id: str
+
+    def is_complete(self) -> bool:
+        return bool((self.token or "").strip()) and bool((self.chat_id or "").strip())
 
 
 class Settings(BaseSettings):
@@ -14,9 +37,55 @@ class Settings(BaseSettings):
     openrouter_site_url: str | None = None
     openrouter_app_name: str = "AI News Agent"
 
+    # Stage A (cheap deterministic ranker) + Stage B (research / writer)
+    # models, ported from the LinkedIn agent's two-stage split so the
+    # coordinator can apply per-subagent overrides (Decision J). The legacy
+    # `openrouter_model` field is untouched — it remains the news pipeline's
+    # summarization model and is *not* repurposed as Stage A/B.
+    openrouter_stage_a_model: str = "openai/gpt-oss-120b"
+    openrouter_stage_b_research_model: str = "anthropic/claude-sonnet-5"
+    openrouter_stage_b_writer_model: str = "anthropic/claude-opus-4-8"
+
+    # Tavily stays in the plan *only* as per-topic research evidence
+    # (Decision E) — the LinkedIn agent's own Tavily/RSS discovery is dropped,
+    # so we port the search/extract knobs, not the discovery_* ones.
+    tavily_api_key: str | None = None
+    tavily_base_url: str = "https://api.tavily.com"
+    tavily_topic: str = "news"
+    tavily_search_depth: str = "advanced"
+    tavily_time_range: str = "day"
+
+    # Deep-agent knobs ported from the LinkedIn agent (Decision B). These bound
+    # investigation cost and the timeouts already seen in current runs (risk row
+    # in the plan).
+    deep_agent_enabled: bool = True
+    deep_agent_model: str = "anthropic/claude-sonnet-5"
+    deep_agent_timeout_seconds: int = 75
+    deep_agent_max_evidence_sources: int = 5
+    deep_agent_max_evidence_chars: int = 1400
+
+    # Coordinator orchestration bounds (Stage-A/B split enforced per subagent).
+    max_topics_per_run: int = 5
+    deep_research_topic_concurrency: int = 4
+    adaptive_investigation_concurrency: int = 3
+    telegram_send_concurrency: int = 3
+
+    # Telegram — legacy top-level credentials. Kept as the backward-compatible
+    # source for the `news` bot profile so the existing digest `run` path and
+    # TelegramClient (which still reads these fields directly) are unchanged
+    # until P6.1 refactors delivery onto the registry.
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     telegram_parse_mode: str = "HTML"
+
+    # Named bot profiles. The `news` profile is backfilled from the legacy
+    # top-level credentials above when these are unset (backward compat); the
+    # `linkedin` profile is optional until that bot exists (P1.2 acceptance:
+    # dry-run needs no new required keys).
+    telegram_news_bot_token: str | None = None
+    telegram_news_chat_id: str | None = None
+    telegram_linkedin_bot_token: str | None = None
+    telegram_linkedin_chat_id: str | None = None
 
     langsmith_api_key: str | None = None
     langsmith_project: str = "ai-news-agent"
@@ -32,6 +101,13 @@ class Settings(BaseSettings):
     max_articles_per_source: int = 3
     user_agent: str = "AINewsAgent/0.1"
 
+    # Orchestrator filesystem conventions (StateBackend lands in P5.1; these
+    # locate the dirs the fetch_curated_ai_news tool and export tool write to).
+    orchestrator_data_dir: str = "data/orchestrator"
+    outputs_dir: str = "outputs"
+    style_profile_file: str = "data/style_profile.json"
+    style_samples_dir: str = "style_samples"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -41,7 +117,10 @@ class Settings(BaseSettings):
 
     def missing_required_runtime_fields(self, dry_run: bool) -> list[str]:
         """Telegram credentials are only required for real runs; --dry-run never
-        calls Telegram, so it's exempt from this check."""
+        calls Telegram, so it's exempt from this check. For now this is keyed on
+        the legacy top-level `news` fields (the digest path); the `linkedin`
+        profile is validated lazily at delivery time, where a missing profile
+        can be reported with the bot name that asked for it."""
         missing: list[str] = []
 
         if not dry_run:
@@ -51,6 +130,37 @@ class Settings(BaseSettings):
                 missing.append("TELEGRAM_CHAT_ID")
 
         return missing
+
+    def bot_profile(self, name: BotName) -> BotProfile | None:
+        """Resolve a named Telegram bot profile, or None if the bot isn't
+        configured yet.
+
+        The `news` profile falls back to the legacy top-level credentials so a
+        repo configured before bot-profile env vars existed keeps delivering the
+        digest unchanged. An *explicit* profile env var wins over the fallback;
+        that lets an operator split the news digest onto a dedicated bot later
+        without touching the legacy fields. The `linkedin` profile has no
+        fallback — it's optional until its bot exists (P1.2)."""
+        if name not in _KNOWN_BOTS:
+            raise ValueError(f"Unknown Telegram bot profile: {name!r}")
+
+        if name == "news":
+            token = self.telegram_news_bot_token or self.telegram_bot_token
+            chat_id = self.telegram_news_chat_id or self.telegram_chat_id
+        else:
+            token = self.telegram_linkedin_bot_token
+            chat_id = self.telegram_linkedin_chat_id
+
+        if not (token or "").strip() or not (chat_id or "").strip():
+            return None
+        return BotProfile(name=name, token=token or "", chat_id=chat_id or "")
+
+    def bot_profiles(self) -> dict[BotName, BotProfile]:
+        """All fully-configured bot profiles. Used by delivery tools to report
+        which targets are available in a run (e.g. dry-run preview)."""
+        return {
+            name: profile for name in _KNOWN_BOTS if (profile := self.bot_profile(name)) is not None
+        }
 
 
 @lru_cache(maxsize=1)

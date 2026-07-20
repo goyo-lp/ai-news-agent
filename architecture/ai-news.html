@@ -117,6 +117,24 @@
   footer{padding:30px 0 60px;color:var(--dim);font-size:12px}
   footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
   .muted{color:var(--muted)} .ok{color:var(--green)} .bad{color:var(--red)}
+
+  /* Status badges */
+  .st{display:inline-flex;align-items:center;gap:5px;font:700 10px var(--mono);padding:2px 8px;border-radius:6px;letter-spacing:.06em;text-transform:uppercase}
+  .st.done{background:color-mix(in srgb,var(--green) 18%,transparent);color:var(--green);border:1px solid color-mix(in srgb,var(--green) 45%,var(--line))}
+  .st.partial{background:color-mix(in srgb,var(--amber) 18%,transparent);color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 45%,var(--line))}
+  .st.todo{background:color-mix(in srgb,var(--dim) 14%,transparent);color:var(--dim);border:1px solid color-mix(in srgb,var(--dim) 45%,var(--line))}
+  .pr.done{border-color:color-mix(in srgb,var(--green) 35%,var(--line))}
+  .pr.partial{border-color:color-mix(in srgb,var(--amber) 35%,var(--line))}
+  .pr.done .title::after,.pr.partial .title::after{content:" ✓";color:var(--green);font-weight:800}
+  .pr.partial .title::after{content:" ⚠";color:var(--amber)}
+  .phase.done::before{background:var(--green)}
+  .phase.partial::before{background:var(--amber)}
+  .progress{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:16px 0 22px}
+  .progress .seg{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .progress .seg .k{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim)}
+  .progress .seg .v{font-size:20px;font-weight:700;margin-top:2px}
+  .bar{height:8px;border-radius:6px;background:var(--bg2);overflow:hidden;margin:6px 0 14px;border:1px solid var(--line)}
+  .bar > span{display:block;height:100%;background:linear-gradient(90deg,var(--green),var(--amber));width:0;transition:width .4s}
 </style>
 </head>
 <body>
@@ -128,6 +146,7 @@
     <p class="lede">A phase-by-phase plan to go from two standalone linear pipelines (the deterministic <b>AI News Agent</b> + the 13-node <b>LinkedIn Agent</b>) to a single <b>coordinator deep agent</b> that consumes curated news as a tool, researches each topic with an isolated adaptive subagent (fetching the real article when it decides to), and writes LinkedIn post proposals in your voice — while reusing the tested code you already have.</p>
     <div class="hero meta">
       <span class="pill"><span class="dot"></span> ~30 PRs · each ≤ 500 LOC</span>
+      <span class="pill"><span class="dot" style="background:var(--green)"></span> Progress: 5 done · ~25 to go</span>
       <span><b>Target framework:</b> <code>create_deep_agent()</code> (coordinator-worker)</span>
       <span><b>Host repo:</b> AI News Agent (evolves into coordinator)</span>
     </div>
@@ -166,7 +185,30 @@
 
 <section>
   <div class="wrap">
-    <h2><span class="num">02</span>Where we are → where we're going</h2>
+    <h2><span class="num">02</span>Build progress (as of 2026-07-20)</h2>
+    <p class="sub">Tracked live against this plan — what the repo actually contains, not what's intended.</p>
+    <div class="grid cards">
+      <div class="card"><div class="k" style="color:var(--green)">✓ P0.1 — Coordinator skeleton</div><div class="v"><span class="st done">done</span> <code>src/app/orchestrator/</code> exists; pyproject has <code>deepagents</code>, <code>langchain</code>, <code>langchain-openai</code>; ruff + mypy + pytest configured.</div></div>
+      <div class="card"><div class="k" style="color:var(--green)">✓ P0.2 — Shared data contracts</div><div class="v"><span class="st done">done</span> <code>orchestrator/schemas.py</code> defines <code>CuratedArticle</code>, <code>TopicCandidate</code>, <code>ResearchBrief</code>, <code>PostProposal</code>; <code>CuratedArticle.from_article</code> enforces parity constructively; <code>tests/test_schemas.py</code> pins it.</div></div>
+      <div class="card"><div class="k" style="color:var(--green)">✓ P1.1 — News pipeline as a pure function</div><div class="v"><span class="st done">done</span> <code>run_curation() → list[CuratedArticle]</code> in <code>app.main</code> via <code>build_curation_workflow</code> (ingest→enrich→rank→summarize, stops before deliver); CLI <code>run</code> untouched; <code>tests/test_curation.py</code> green.</div></div>
+      <div class="card"><div class="k" style="color:var(--green)">✓ P1.2 — Unified Settings + bot profiles</div><div class="v"><span class="st done">done</span> <code>Settings</code> now carries Stage A/B models, Tavily research-evidence knobs, deep-agent bounds, orchestration limits, and named Telegram bot profiles (<code>news</code> + <code>linkedin</code>). The <code>news</code> profile falls back to legacy <code>TELEGRAM_BOT_TOKEN</code>/<code>CHAT_ID</code> for backward compat; <code>linkedin</code> is optional. <code>bot_profile(name)</code> + <code>bot_profiles()</code>; unknown names fail loudly.</div></div>
+      <div class="card"><div class="k" style="color:var(--green)">✓ P1.3 — fetch_curated_ai_news tool</div><div class="v"><span class="st done">done</span> <code>orchestrator/tools/news.py</code> wraps <code>run_curation</code> (P1.1), serializes CuratedArticles to <code>data/orchestrator/articles.json</code>, and returns a compressed summary (count + path) — no article payload in context. LangChain <code>StructuredTool</code> with sync + async entrypoints; tests pin the boundary-projection, clamped limit, and summary shape.</div></div>
+      <div class="card"><div class="k" style="color:var(--dim)">○ Phases 2 – 8</div><div class="v"><span class="st todo">not started</span> No <code>tools/</code>, <code>subagents/</code>, <code>state.py</code>, <code>agent.py</code>, <code>prompts.py</code>, skills, or delivery/export tools yet.</div></div>
+    </div>
+    <div class="progress">
+      <div class="seg"><div class="k">PRs merged</div><div class="v ok">5</div></div>
+      <div class="seg"><div class="k">PRs partial</div><div class="v muted">0</div></div>
+      <div class="seg"><div class="k">PRs not started</div><div class="v muted">~25</div></div>
+      <div class="seg"><div class="k">Phases touched</div><div class="v">2 / 9</div></div>
+    </div>
+    <div class="bar"><span style="width:17%"></span></div>
+    <div class="note"><b>Next unblocked PRs:</b> Phase 1 is complete — the parallelizable wave <code>P2.2</code> (fetch_article), <code>P2.3</code> (tavily tools), and <code>P3.1</code> (linkedin-voice skill) are now all open. <code>P2.1</code> (technical_rank) needs <code>P1.3</code> (done) so it's unblocked too.</div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2><span class="num">03</span>Where we are → where we're going</h2>
     <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px">
       <div class="box">
         <h4 style="margin-top:0">Today — two linear pipelines</h4>
@@ -210,7 +252,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
 
 <section>
   <div class="wrap">
-    <h2><span class="num">03</span>Six guiding principles</h2>
+    <h2><span class="num">04</span>Six guiding principles</h2>
     <ol class="steps">
       <li><b>Deterministic work stays code, exposed as tools.</b> Never agentify a fixed recipe — you'd pay tokens to re-derive tested logic.</li>
       <li><b>Spend agency only where decisions are open-ended.</b> The one genuinely adaptive surface is per-topic research: "fetch the real article or trust the text? verify what? what's technically new?"</li>
@@ -224,7 +266,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
 
 <section>
   <div class="wrap">
-    <h2><span class="num">04</span>Risks &amp; mitigations</h2>
+    <h2><span class="num">05</span>Risks &amp; mitigations</h2>
     <table>
       <thead><tr><th>Risk</th><th>Where</th><th>Mitigation (PR)</th></tr></thead>
       <tbody>
@@ -246,12 +288,12 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
 <div class="view" id="roadmap">
 <section>
   <div class="wrap">
-    <h2><span class="num">05</span>The plan, phase by phase</h2>
+    <h2><span class="num">06</span>The plan, phase by phase</h2>
     <p class="sub">Nine phases, roughly sequential but with parallelizable PRs inside each. The critical path runs Phase 0 → 1 → (2 ∥ 3) → 4 → 5 → 6 → 8; Phase 7 (observability/security) can land alongside 5–6.</p>
 
-    <div class="phase" style="--c:var(--infra)">
-      <div class="ph-h"><span class="ph-n">PHASE 0</span><span class="ph-t">Scaffolding &amp; data contracts</span></div>
-      <div class="ph-goal"><b>Goal:</b> a clean coordinator package and one shared schema module both sides speak, so nothing downstream drifts. <b>Outcome:</b> green CI, empty agent imports, serializable models.</div>
+    <div class="phase done" style="--c:var(--green)">
+      <div class="ph-h"><span class="ph-n">PHASE 0</span><span class="ph-t">Scaffolding &amp; data contracts</span><span class="st done">done</span></div>
+      <div class="ph-goal"><b>Goal:</b> a clean coordinator package and one shared schema module both sides speak, so nothing downstream drifts. <b>Outcome:</b> green CI, empty agent imports, serializable models. <b><span class="ok">Status (2026-07-20):</span></b> P0.1 + P0.2 both merged — orchestrator package, deps, and all four boundary models with parity tests are live.</div>
       <ul>
         <li>Stand up the coordinator package (deps: deepagents, langchain, langgraph, langchain-openai) with ruff/mypy/pytest/CI.</li>
         <li>Define the boundary types once: <code>CuratedArticle</code>, <code>TopicCandidate</code>, <code>ResearchBrief</code>, <code>PostProposal</code>.</li>
@@ -259,9 +301,9 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
       <div class="prs">PRs: P0.1, P0.2</div>
     </div>
 
-    <div class="phase" style="--c:var(--tool)">
-      <div class="ph-h"><span class="ph-n">PHASE 1</span><span class="ph-t">News pipeline becomes an in-process tool (the producer)</span></div>
-      <div class="ph-goal"><b>Goal:</b> the repo's own news pipeline stops "delivering" and starts "returning data," then gets wrapped as a tool that writes into the deep agent's filesystem. <b>Outcome:</b> the coordinator pulls today's curated, ranked, summarized articles by a direct in-process call — no cross-repo packaging.</div>
+    <div class="phase done" style="--c:var(--green)">
+      <div class="ph-h"><span class="ph-n">PHASE 1</span><span class="ph-t">News pipeline becomes an in-process tool (the producer)</span><span class="st done">done</span></div>
+      <div class="ph-goal"><b>Goal:</b> the repo's own news pipeline stops "delivering" and starts "returning data," then gets wrapped as a tool that writes into the deep agent's filesystem. <b>Outcome:</b> the coordinator pulls today's curated, ranked, summarized articles by a direct in-process call — no cross-repo packaging. <b><span class="ok">Status (2026-07-20):</span></b> P1.1, P1.2, and P1.3 all merged — <code>run_curation</code>, the unified <code>Settings</code> with bot profiles + LinkedIn/Tavily/deep-agent knobs, and the <code>fetch_curated_ai_news</code> tool are live. Phase 1 complete.</div>
       <ul>
         <li>Refactor the pipeline to expose <code>run_curation() → list[Article]</code> (ingest→enrich→rank→summarize, stop before deliver). CLI unchanged.</li>
         <li>Unify config: one <code>Settings</code> covering OpenRouter + Tavily + Telegram + deep-agent knobs (news + ported LinkedIn settings).</li>
@@ -271,7 +313,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
     </div>
 
     <div class="phase" style="--c:var(--det)">
-      <div class="ph-h"><span class="ph-n">PHASE 2</span><span class="ph-t">Deterministic logic becomes tools</span></div>
+      <div class="ph-h"><span class="ph-n">PHASE 2</span><span class="ph-t">Deterministic logic becomes tools</span><span class="st todo">not started</span></div>
       <div class="ph-goal"><b>Goal:</b> extract the LinkedIn agent's tested logic into standalone tools the coordinator and subagents call — so "follow the LinkedIn logic" means literally calling the same functions. <b>Outcome:</b> ranking, article fetch, search, verification, and quality gate all callable in isolation.</div>
       <ul>
         <li><code>technical_rank</code> — reuse the technical ranker/scoring; reads articles file → writes ranked topics.</li>
@@ -284,7 +326,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
     </div>
 
     <div class="phase" style="--c:var(--skill)">
-      <div class="ph-h"><span class="ph-n">PHASE 3</span><span class="ph-t">Voice becomes a skill</span></div>
+      <div class="ph-h"><span class="ph-n">PHASE 3</span><span class="ph-t">Voice becomes a skill</span><span class="st todo">not started</span></div>
       <div class="ph-goal"><b>Goal:</b> encode your writing voice as the one thing that <i>is</i> genuinely instructions. <b>Outcome:</b> a loadable <code>/skills/linkedin-voice/</code> and a style-profile loader the writer subagent reads.</div>
       <ul>
         <li>Author <code>SKILL.md</code>: tone, anti-hype rules, structure, word limits, derived from <code>style_samples/</code>.</li>
@@ -294,7 +336,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
     </div>
 
     <div class="phase" style="--c:var(--sub)">
-      <div class="ph-h"><span class="ph-n">PHASE 4</span><span class="ph-t">The two subagents</span></div>
+      <div class="ph-h"><span class="ph-n">PHASE 4</span><span class="ph-t">The two subagents</span><span class="st todo">not started</span></div>
       <div class="ph-goal"><b>Goal:</b> stand up the isolated adaptive workers. <b>Outcome:</b> a research subagent that turns a topic+URL into a verified brief (deciding for itself whether to fetch the real article), and a writer subagent that turns a brief+voice into a post proposal.</div>
       <ul>
         <li><code>research-subagent</code> — tools: fetch_article, tavily_search/extract, verify_claim; model = Stage B; returns a compressed <code>ResearchBrief</code> to <code>/briefs/</code>.</li>
@@ -304,7 +346,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
     </div>
 
     <div class="phase" style="--c:var(--acc)">
-      <div class="ph-h"><span class="ph-n">PHASE 5</span><span class="ph-t">The coordinator</span></div>
+      <div class="ph-h"><span class="ph-n">PHASE 5</span><span class="ph-t">The coordinator</span><span class="st todo">not started</span></div>
       <div class="ph-goal"><b>Goal:</b> wire everything into <code>create_deep_agent</code> with a StateBackend and an orchestration prompt that plans and delegates. <b>Outcome:</b> an end-to-end dry run that produces N post proposals.</div>
       <ul>
         <li>Configure StateBackend + file conventions (<code>/data/articles.json</code>, <code>/topics.json</code>, <code>/briefs/</code>, <code>/drafts/</code>).</li>
@@ -315,7 +357,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
     </div>
 
     <div class="phase" style="--c:var(--pink)">
-      <div class="ph-h"><span class="ph-n">PHASE 6</span><span class="ph-t">Delivery (two bots) &amp; outputs</span></div>
+      <div class="ph-h"><span class="ph-n">PHASE 6</span><span class="ph-t">Delivery (two bots) &amp; outputs</span><span class="st todo">not started</span></div>
       <div class="ph-goal"><b>Goal:</b> ship LinkedIn proposals to a dedicated LinkedIn bot, keep the news digest flowing to the News bot, and persist artifacts. <b>Outcome:</b> two Telegram bots served from one process; each proposal sent as its own message; per-run outputs on disk.</div>
       <ul>
         <li><b>Multi-bot routing:</b> refactor <code>telegram_client</code> to target a named bot profile (token + chat); the news <code>run</code> path uses the <code>news</code> profile, unchanged.</li>
@@ -326,7 +368,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
     </div>
 
     <div class="phase" style="--c:var(--purple)">
-      <div class="ph-h"><span class="ph-n">PHASE 7</span><span class="ph-t">Observability, cost &amp; security</span></div>
+      <div class="ph-h"><span class="ph-n">PHASE 7</span><span class="ph-t">Observability, cost &amp; security</span><span class="st todo">not started</span></div>
       <div class="ph-goal"><b>Goal:</b> make runs traceable, costed, bounded, and safe. <b>Outcome:</b> LangSmith traces, an end-of-run cost summary, env-driven model overrides, and an SSRF-hardened fetch tool. Can land alongside Phases 5–6.</div>
       <ul>
         <li>LangSmith tracing across coordinator, subagents, tools.</li>
@@ -338,7 +380,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
     </div>
 
     <div class="phase" style="--c:var(--green)">
-      <div class="ph-h"><span class="ph-n">PHASE 8</span><span class="ph-t">Parity, cutover &amp; cleanup</span></div>
+      <div class="ph-h"><span class="ph-n">PHASE 8</span><span class="ph-t">Parity, cutover &amp; cleanup</span><span class="st todo">not started</span></div>
       <div class="ph-goal"><b>Goal:</b> prove the deep agent matches or beats the old graph, switch the entrypoint, then delete the dead pipeline. <b>Outcome:</b> <code>run</code> uses the coordinator; the legacy 13-node graph is gone.</div>
       <ul>
         <li>Full deterministic dry-run E2E snapshot test.</li>
@@ -356,22 +398,22 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
 <div class="view" id="prs">
 <section>
   <div class="wrap">
-    <h2><span class="num">06</span>Work breakdown — every PR</h2>
+    <h2><span class="num">07</span>Work breakdown — every PR</h2>
     <p class="sub">~30 PRs, each ≤500 LOC (estimates include tests). Tags: <span class="tag t-infra">infra</span> <span class="tag t-tool">tool</span> <span class="tag t-det">det</span> <span class="tag t-sub">subagent</span> <span class="tag t-skill">skill</span>. LOC is a ceiling target, not a budget to fill — many will be far smaller.</p>
     <div class="note"><b>LOC caveat after seeing the vendored code:</b> the Phase-2 estimates assume thin <i>wrappers</i>. A few LinkedIn modules — <code>deep_agent_investigator</code>, <code>post_generator</code>, <code>brief_verifier</code> — carry real logic coupled to the old 13-node graph's state, so porting them into tool/subagent shape is more than a wrapper. Expect P2.2/P2.4 and P4.1 to run larger than listed. Not a blocker; just re-baseline those PRs.</div>
 
     <h3>Phase 0 — Scaffolding &amp; contracts</h3>
     <div class="prgrid">
-      <div class="pr">
-        <div class="top"><span class="id">P0.1</span><span class="tag t-infra">infra</span><span class="loc">~120 LOC</span></div>
+      <div class="pr done">
+        <div class="top"><span class="id">P0.1</span><span class="tag t-infra">infra</span><span class="st done">done</span><span class="loc">~120 LOC</span></div>
         <div class="title">Coordinator package skeleton</div>
         <div class="row"><b>Scope:</b> new <code>src/app/orchestrator/</code>; pyproject deps (deepagents, langchain, langgraph, langchain-openai); ruff + mypy + pytest + CI.</div>
         <div class="row files">pyproject.toml · src/app/orchestrator/__init__.py · .github/workflows/ci.yml</div>
         <div class="row dep">Depends on: —</div>
         <div class="ac">✓ <code>pytest</code> green on empty suite; package imports; CI passes.</div>
       </div>
-      <div class="pr">
-        <div class="top"><span class="id">P0.2</span><span class="tag t-infra">infra</span><span class="loc">~150 LOC</span></div>
+      <div class="pr done">
+        <div class="top"><span class="id">P0.2</span><span class="tag t-infra">infra</span><span class="st done">done</span><span class="loc">~150 LOC</span></div>
         <div class="title">Shared data contracts</div>
         <div class="row"><b>Scope:</b> pydantic <code>CuratedArticle</code>, <code>TopicCandidate</code>, <code>ResearchBrief</code>, <code>PostProposal</code> — single source of truth for the boundary.</div>
         <div class="row files">src/app/orchestrator/schemas.py · tests/test_schemas.py</div>
@@ -382,24 +424,24 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
 
     <h3>Phase 1 — News Agent → tool</h3>
     <div class="prgrid">
-      <div class="pr">
-        <div class="top"><span class="id">P1.1</span><span class="tag t-det">det</span><span class="loc">~180 LOC</span></div>
+      <div class="pr done">
+        <div class="top"><span class="id">P1.1</span><span class="tag t-det">det</span><span class="st done">done</span><span class="loc">~180 LOC</span></div>
         <div class="title">News pipeline as a pure function</div>
         <div class="row"><b>Scope:</b> add <code>run_curation(...) → list[Article]</code> running ingest→enrich→rank→summarize, stopping before deliver. CLI untouched.</div>
         <div class="row files">src/app/main.py · src/app/graph/workflow.py · tests/test_curation.py</div>
         <div class="row dep">Depends on: —</div>
         <div class="ac">✓ Returns structured articles; existing tests pass; dry-run still works.</div>
       </div>
-      <div class="pr">
-        <div class="top"><span class="id">P1.2</span><span class="tag t-infra">infra</span><span class="loc">~90 LOC</span></div>
+      <div class="pr done">
+        <div class="top"><span class="id">P1.2</span><span class="tag t-infra">infra</span><span class="st done">done</span><span class="loc">~90 LOC</span></div>
         <div class="title">Unify Settings / config + bot profiles</div>
         <div class="row"><b>Scope:</b> extend <code>Settings</code> with the ported LinkedIn knobs (Tavily, deep-agent, Stage-A/B models, concurrency) <b>and named Telegram bot profiles</b> (<code>news</code> + <code>linkedin</code>, each token + chat id) so one config drives everything.</div>
         <div class="row files">src/app/config.py · .env.example · tests/test_config.py</div>
         <div class="row dep">Depends on: P0.1</div>
         <div class="ac">✓ New settings load with defaults; existing <code>TELEGRAM_BOT_TOKEN</code>/<code>CHAT_ID</code> map to the <code>news</code> profile; <code>linkedin</code> profile optional until its bot exists; dry-run needs no new required keys.</div>
       </div>
-      <div class="pr">
-        <div class="top"><span class="id">P1.3</span><span class="tag t-tool">tool</span><span class="loc">~120 LOC</span></div>
+      <div class="pr done">
+        <div class="top"><span class="id">P1.3</span><span class="tag t-tool">tool</span><span class="st done">done</span><span class="loc">~120 LOC</span></div>
         <div class="title"><code>fetch_curated_ai_news</code> tool</div>
         <div class="row"><b>Scope:</b> LangChain tool wrapping <code>run_curation</code>; writes <code>/data/articles.json</code> to state; returns count + path only (no payload in context).</div>
         <div class="row files">src/app/orchestrator/tools/news.py · tests/test_tool_news.py</div>
@@ -411,7 +453,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
     <h3>Phase 2 — Deterministic logic → tools</h3>
     <div class="prgrid">
       <div class="pr">
-        <div class="top"><span class="id">P2.1</span><span class="tag t-det">det</span><span class="loc">~140 LOC</span></div>
+        <div class="top"><span class="id">P2.1</span><span class="tag t-det">det</span><span class="st todo">not started</span><span class="loc">~140 LOC</span></div>
         <div class="title"><code>technical_rank</code> tool</div>
         <div class="row"><b>Scope:</b> reuse technical ranker/scoring; read articles file → write ranked <code>/topics.json</code>; return top-N summary.</div>
         <div class="row files">src/app/orchestrator/tools/rank.py · tests/test_tool_rank.py</div>
@@ -419,7 +461,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
         <div class="ac">✓ Deterministic ordering test; demotes hype without technical detail.</div>
       </div>
       <div class="pr">
-        <div class="top"><span class="id">P2.2</span><span class="tag t-tool">tool</span><span class="loc">~120 LOC</span></div>
+        <div class="top"><span class="id">P2.2</span><span class="tag t-tool">tool</span><span class="st todo">not started</span><span class="loc">~120 LOC</span></div>
         <div class="title"><code>fetch_article</code> tool (real-article fetch)</div>
         <div class="row"><b>Scope:</b> reuse News Agent SSRF-guarded, size-capped GET + extractor; URL → clean text + OpenGraph.</div>
         <div class="row files">src/app/orchestrator/tools/fetch.py · tests/test_tool_fetch.py</div>
@@ -427,7 +469,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
         <div class="ac">✓ HTML → clean text; SSRF guard blocks a private IP; redirect hop blocked.</div>
       </div>
       <div class="pr">
-        <div class="top"><span class="id">P2.3</span><span class="tag t-tool">tool</span><span class="loc">~90 LOC</span></div>
+        <div class="top"><span class="id">P2.3</span><span class="tag t-tool">tool</span><span class="st todo">not started</span><span class="loc">~90 LOC</span></div>
         <div class="title"><code>tavily_search</code> / <code>tavily_extract</code> tools</div>
         <div class="row"><b>Scope:</b> wrap existing Tavily client; normalize results to schema.</div>
         <div class="row files">src/app/orchestrator/tools/tavily.py · tests/test_tool_tavily.py</div>
@@ -435,7 +477,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
         <div class="ac">✓ Mocked search returns normalized results; dry-run returns empty gracefully.</div>
       </div>
       <div class="pr">
-        <div class="top"><span class="id">P2.4</span><span class="tag t-det">det</span><span class="loc">~150 LOC</span></div>
+        <div class="top"><span class="id">P2.4</span><span class="tag t-det">det</span><span class="st todo">not started</span><span class="loc">~150 LOC</span></div>
         <div class="title"><code>verify_claim</code> tool</div>
         <div class="row"><b>Scope:</b> wrap brief verifier (model + Tavily evidence) → status + confidence + notes.</div>
         <div class="row files">src/app/orchestrator/tools/verify.py · tests/test_tool_verify.py</div>
@@ -443,7 +485,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
         <div class="ac">✓ Returns status/confidence; deterministic dry-run fallback.</div>
       </div>
       <div class="pr">
-        <div class="top"><span class="id">P2.5</span><span class="tag t-det">det</span><span class="loc">~110 LOC</span></div>
+        <div class="top"><span class="id">P2.5</span><span class="tag t-det">det</span><span class="st todo">not started</span><span class="loc">~110 LOC</span></div>
         <div class="title"><code>quality_gate</code> tool</div>
         <div class="row"><b>Scope:</b> word-count 105–182, single-topic, anti-hype/jargon checks → pass + reasons.</div>
         <div class="row files">src/app/orchestrator/tools/quality.py · tests/test_tool_quality.py</div>
@@ -455,7 +497,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
     <h3>Phase 3 — Voice skill</h3>
     <div class="prgrid">
       <div class="pr">
-        <div class="top"><span class="id">P3.1</span><span class="tag t-skill">skill</span><span class="loc">~80 LOC</span></div>
+        <div class="top"><span class="id">P3.1</span><span class="tag t-skill">skill</span><span class="st todo">not started</span><span class="loc">~80 LOC</span></div>
         <div class="title"><code>linkedin-voice</code> skill</div>
         <div class="row"><b>Scope:</b> author <code>/skills/linkedin-voice/SKILL.md</code> — tone, anti-hype, structure, word limits, from <code>style_samples/</code>.</div>
         <div class="row files">skills/linkedin-voice/SKILL.md</div>
@@ -463,7 +505,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
         <div class="ac">✓ Skill loads; referenced by writer subagent build.</div>
       </div>
       <div class="pr">
-        <div class="top"><span class="id">P3.2</span><span class="tag t-tool">tool</span><span class="loc">~90 LOC</span></div>
+        <div class="top"><span class="id">P3.2</span><span class="tag t-tool">tool</span><span class="st todo">not started</span><span class="loc">~90 LOC</span></div>
         <div class="title">Style-profile loader</div>
         <div class="row"><b>Scope:</b> reuse <code>style_profile.py</code>; load/build <code>data/style_profile.json</code> into state.</div>
         <div class="row files">src/app/orchestrator/tools/style.py · tests/test_tool_style.py</div>
@@ -475,7 +517,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
     <h3>Phase 4 — Subagents</h3>
     <div class="prgrid">
       <div class="pr">
-        <div class="top"><span class="id">P4.1</span><span class="tag t-sub">subagent</span><span class="loc">~160 LOC</span></div>
+        <div class="top"><span class="id">P4.1</span><span class="tag t-sub">subagent</span><span class="st todo">not started</span><span class="loc">~160 LOC</span></div>
         <div class="title"><code>research-subagent</code></div>
         <div class="row"><b>Scope:</b> def with tools [fetch_article, tavily_search/extract, verify_claim], Stage-B model, system prompt (decide to fetch real article, verify, extract novelty); writes <code>/briefs/{topic}.json</code>.</div>
         <div class="row files">src/app/orchestrator/subagents/research.py · tests/test_research_subagent.py</div>
@@ -483,7 +525,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
         <div class="ac">✓ Topic+URL → verified brief file; runs in isolated context; per-topic timeout enforced.</div>
       </div>
       <div class="pr">
-        <div class="top"><span class="id">P4.2</span><span class="tag t-sub">subagent</span><span class="loc">~140 LOC</span></div>
+        <div class="top"><span class="id">P4.2</span><span class="tag t-sub">subagent</span><span class="st todo">not started</span><span class="loc">~140 LOC</span></div>
         <div class="title"><code>writer-subagent</code></div>
         <div class="row"><b>Scope:</b> skill = linkedin-voice; Stage-B model; reads brief + style profile → <code>PostProposal</code>.</div>
         <div class="row files">src/app/orchestrator/subagents/writer.py · tests/test_writer_subagent.py</div>
@@ -495,7 +537,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
     <h3>Phase 5 — Coordinator</h3>
     <div class="prgrid">
       <div class="pr">
-        <div class="top"><span class="id">P5.1</span><span class="tag t-infra">infra</span><span class="loc">~120 LOC</span></div>
+        <div class="top"><span class="id">P5.1</span><span class="tag t-infra">infra</span><span class="st todo">not started</span><span class="loc">~120 LOC</span></div>
         <div class="title">StateBackend &amp; data conventions</div>
         <div class="row"><b>Scope:</b> configure StateBackend; define file paths + read/write helpers; assert structured data never rides subagent reports.</div>
         <div class="row files">src/app/orchestrator/state.py · tests/test_state.py</div>
@@ -503,7 +545,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
         <div class="ac">✓ Files persist across turns; convention documented + asserted in test.</div>
       </div>
       <div class="pr">
-        <div class="top"><span class="id">P5.2</span><span class="tag t-infra">infra</span><span class="loc">~150 LOC</span></div>
+        <div class="top"><span class="id">P5.2</span><span class="tag t-infra">infra</span><span class="st todo">not started</span><span class="loc">~150 LOC</span></div>
         <div class="title">Coordinator agent wiring</div>
         <div class="row"><b>Scope:</b> <code>create_deep_agent(model, tools=[...], subagents=[research, writer], skills, backend, context_schema)</code>.</div>
         <div class="row files">src/app/orchestrator/agent.py · tests/test_agent_build.py</div>
@@ -511,7 +553,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
         <div class="ac">✓ Agent builds; dry-run <code>invoke</code> completes without error.</div>
       </div>
       <div class="pr">
-        <div class="top"><span class="id">P5.3</span><span class="tag t-infra">infra</span><span class="loc">~120 LOC</span></div>
+        <div class="top"><span class="id">P5.3</span><span class="tag t-infra">infra</span><span class="st todo">not started</span><span class="loc">~120 LOC</span></div>
         <div class="title">Orchestration prompt &amp; plan</div>
         <div class="row"><b>Scope:</b> coordinator system prompt: write_todos → fetch → rank → per-topic delegate research → write → quality-gate (retry) → deliver; guardrails (max topics, no fabricated URLs).</div>
         <div class="row files">src/app/orchestrator/prompts.py · tests/test_e2e_dryrun.py</div>
@@ -523,7 +565,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
     <h3>Phase 6 — Delivery &amp; outputs</h3>
     <div class="prgrid">
       <div class="pr">
-        <div class="top"><span class="id">P6.1</span><span class="tag t-det">det</span><span class="loc">~130 LOC</span></div>
+        <div class="top"><span class="id">P6.1</span><span class="tag t-det">det</span><span class="st todo">not started</span><span class="loc">~130 LOC</span></div>
         <div class="title">Multi-bot Telegram routing</div>
         <div class="row"><b>Scope:</b> refactor <code>telegram_client</code> to accept a named bot profile (token + chat id) from a config-driven registry; the existing news delivery passes <code>bot="news"</code> — behavior identical.</div>
         <div class="row files">src/app/services/telegram_client.py · src/app/nodes/deliver.py · tests/test_telegram_send.py</div>
@@ -531,7 +573,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
         <div class="ac">✓ News <code>run</code> still delivers to the news chat (parity); unknown/absent profile fails loudly, not silently to the wrong chat.</div>
       </div>
       <div class="pr">
-        <div class="top"><span class="id">P6.2</span><span class="tag t-tool">tool</span><span class="loc">~90 LOC</span></div>
+        <div class="top"><span class="id">P6.2</span><span class="tag t-tool">tool</span><span class="st todo">not started</span><span class="loc">~90 LOC</span></div>
         <div class="title"><code>deliver_telegram</code> tool (LinkedIn bot)</div>
         <div class="row"><b>Scope:</b> coordinator tool sending each <code>PostProposal</code> to the <code>linkedin</code> bot profile; dry-run preview names the target bot; retry + token redaction inherited from P6.1.</div>
         <div class="row files">src/app/orchestrator/tools/telegram.py · tests/test_tool_telegram.py</div>
@@ -539,7 +581,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
         <div class="ac">✓ Dry-run previews show <code>bot=linkedin</code> + target chat; proposals never route to the news chat.</div>
       </div>
       <div class="pr">
-        <div class="top"><span class="id">P6.3</span><span class="tag t-tool">tool</span><span class="loc">~120 LOC</span></div>
+        <div class="top"><span class="id">P6.3</span><span class="tag t-tool">tool</span><span class="st todo">not started</span><span class="loc">~120 LOC</span></div>
         <div class="title"><code>export_report</code> tool</div>
         <div class="row"><b>Scope:</b> write <code>outputs/YYYY-MM-DD/{posts.md, run_report.json, briefs.json}</code>.</div>
         <div class="row files">src/app/orchestrator/tools/export.py · tests/test_tool_export.py</div>
@@ -551,7 +593,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
     <h3>Phase 7 — Observability, cost &amp; security</h3>
     <div class="prgrid">
       <div class="pr">
-        <div class="top"><span class="id">P7.1</span><span class="tag t-infra">infra</span><span class="loc">~80 LOC</span></div>
+        <div class="top"><span class="id">P7.1</span><span class="tag t-infra">infra</span><span class="st todo">not started</span><span class="loc">~80 LOC</span></div>
         <div class="title">LangSmith tracing</div>
         <div class="row"><b>Scope:</b> wrap coordinator + subagents + tools; env config.</div>
         <div class="row files">src/app/orchestrator/tracing.py · config</div>
@@ -559,7 +601,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
         <div class="ac">✓ Traces appear under the configured project.</div>
       </div>
       <div class="pr">
-        <div class="top"><span class="id">P7.2</span><span class="tag t-infra">infra</span><span class="loc">~120 LOC</span></div>
+        <div class="top"><span class="id">P7.2</span><span class="tag t-infra">infra</span><span class="st todo">not started</span><span class="loc">~120 LOC</span></div>
         <div class="title">API usage / cost tracker</div>
         <div class="row"><b>Scope:</b> integrate <code>api_usage_tracker.py</code> across OpenRouter/Tavily; end-of-run summary.</div>
         <div class="row files">src/app/orchestrator/usage.py · tests/test_usage.py</div>
@@ -567,7 +609,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
         <div class="ac">✓ Run logs call counts + estimated cost.</div>
       </div>
       <div class="pr">
-        <div class="top"><span class="id">P7.3</span><span class="tag t-infra">infra</span><span class="loc">~70 LOC</span></div>
+        <div class="top"><span class="id">P7.3</span><span class="tag t-infra">infra</span><span class="st todo">not started</span><span class="loc">~70 LOC</span></div>
         <div class="title">Per-subagent model config</div>
         <div class="row"><b>Scope:</b> env-driven overrides (Stage A cheap ranker / Stage B research+write).</div>
         <div class="row files">src/app/orchestrator/config.py · tests/test_config.py</div>
@@ -575,7 +617,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
         <div class="ac">✓ Models resolved from env; override test passes.</div>
       </div>
       <div class="pr">
-        <div class="top"><span class="id">P7.4</span><span class="tag t-tool">tool</span><span class="loc">~90 LOC</span></div>
+        <div class="top"><span class="id">P7.4</span><span class="tag t-tool">tool</span><span class="st todo">not started</span><span class="loc">~90 LOC</span></div>
         <div class="title">SSRF + size cap on <code>fetch_article</code></div>
         <div class="row"><b>Scope:</b> ensure the research subagent's fetches route through the guard + streaming cap.</div>
         <div class="row files">src/app/orchestrator/tools/fetch.py · tests/test_fetch_ssrf.py</div>
@@ -587,7 +629,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
     <h3>Phase 8 — Parity, cutover &amp; cleanup</h3>
     <div class="prgrid">
       <div class="pr">
-        <div class="top"><span class="id">P8.1</span><span class="tag t-infra">infra</span><span class="loc">~140 LOC</span></div>
+        <div class="top"><span class="id">P8.1</span><span class="tag t-infra">infra</span><span class="st todo">not started</span><span class="loc">~140 LOC</span></div>
         <div class="title">Full dry-run E2E snapshot</div>
         <div class="row"><b>Scope:</b> fixture date → deterministic dry-run through coordinator; snapshot outputs.</div>
         <div class="row files">tests/test_e2e_snapshot.py · tests/fixtures/</div>
@@ -595,7 +637,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
         <div class="ac">✓ Stable snapshot; reruns match.</div>
       </div>
       <div class="pr">
-        <div class="top"><span class="id">P8.2</span><span class="tag t-infra">infra</span><span class="loc">~150 LOC</span></div>
+        <div class="top"><span class="id">P8.2</span><span class="tag t-infra">infra</span><span class="st todo">not started</span><span class="loc">~150 LOC</span></div>
         <div class="title">Parity harness (old vs new)</div>
         <div class="row"><b>Scope:</b> run legacy LinkedIn pipeline vs coordinator on same fixtures; diff topic selection + post quality; document deltas.</div>
         <div class="row files">tests/parity/ · scripts/parity.py</div>
@@ -603,7 +645,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
         <div class="ac">✓ Parity report generated; no blocking regressions.</div>
       </div>
       <div class="pr">
-        <div class="top"><span class="id">P8.3</span><span class="tag t-infra">infra</span><span class="loc">~120 LOC</span></div>
+        <div class="top"><span class="id">P8.3</span><span class="tag t-infra">infra</span><span class="st todo">not started</span><span class="loc">~120 LOC</span></div>
         <div class="title">CLI cutover</div>
         <div class="row"><b>Scope:</b> add <code>propose</code> subcommand → coordinator; keep news <code>run</code> as the digest path; README/docs update.</div>
         <div class="row files">src/app/main.py · README.md · architecture/</div>
@@ -611,7 +653,7 @@ News bot via `run`; LinkedIn proposals → LinkedIn bot.</pre>
         <div class="ac">✓ <code>python -m app.main propose</code> drives the deep agent; <code>run</code> still produces the digest.</div>
       </div>
       <div class="pr">
-        <div class="top"><span class="id">P8.4</span><span class="tag t-infra">infra</span><span class="loc">~200 LOC (deletions)</span></div>
+        <div class="top"><span class="id">P8.4</span><span class="tag t-infra">infra</span><span class="st todo">not started</span><span class="loc">~200 LOC (deletions)</span></div>
         <div class="title">Remove interim scaffolding</div>
         <div class="row"><b>Scope:</b> delete port scaffolding + orphaned imports created during the migration; final docs. News pipeline retained.</div>
         <div class="row files">src/app/orchestrator/* · imports cleanup</div>
