@@ -36,6 +36,23 @@ def _initial_state(dry_run: bool, limit: int) -> AgentState:
     }
 
 
+def _bootstrap(
+    *,
+    dry_run: bool,
+    limit: int | None,
+    settings: Settings | None = None,
+) -> tuple[Settings, int, AgentState]:
+    """Shared setup for both pipeline entry points: resolve settings, mirror
+    LangSmith env, clamp the limit, and seed the AgentState. Returns the
+    effective clamped limit alongside the state so callers (notably the
+    curation tool) read the value actually used instead of reconstructing it
+    from a possibly-different Settings instance."""
+    s = settings if settings is not None else get_settings()
+    configure_langsmith_env(s)
+    effective_limit = _clamp_limit(limit, s)
+    return s, effective_limit, _initial_state(dry_run=dry_run, limit=effective_limit)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AI News Agent")
     subparsers = parser.add_subparsers(dest="command")
@@ -51,9 +68,8 @@ def build_parser() -> argparse.ArgumentParser:
 async def run_pipeline(args: argparse.Namespace) -> int:
     """Run one full pipeline invocation. Exit codes: 0 success, 1 one-or-more
     delivery failures, 2 config error (checked before the graph even builds)."""
-    settings = get_settings()
-    configure_langsmith_env(settings)
     dry_run = bool(args.dry_run)
+    settings, _limit, initial_state = _bootstrap(dry_run=dry_run, limit=args.limit)
 
     missing_fields = settings.missing_required_runtime_fields(dry_run=dry_run)
     if missing_fields:
@@ -61,9 +77,6 @@ async def run_pipeline(args: argparse.Namespace) -> int:
         logger.error("Configuration error: missing required .env values: %s", joined)
         print(f"Configuration error: missing required .env values: {joined}")
         return 2
-
-    limit = _clamp_limit(args.limit, settings)
-    initial_state = _initial_state(dry_run=dry_run, limit=limit)
 
     workflow = build_workflow()
     final_state = await workflow.ainvoke(initial_state)
@@ -101,25 +114,34 @@ async def run_pipeline(args: argparse.Namespace) -> int:
     return 0 if failed_count == 0 else 1
 
 
-async def run_curation(limit: int | None = None) -> list[CuratedArticle]:
+async def run_curation(
+    limit: int | None = None,
+    settings: Settings | None = None,
+) -> tuple[list[CuratedArticle], int]:
     """Run ingest -> enrich -> rank -> summarize and return the resulting
-    articles as boundary contracts, stopping before deliver. Additive sibling
-    of run_pipeline() for the orchestrator's fetch_curated_ai_news tool; the
-    CLI `run` command and Telegram delivery are unaffected.
+    articles as boundary contracts plus the effective clamped limit, stopping
+    before deliver. Additive sibling of run_pipeline() for the orchestrator's
+    fetch_curated_ai_news tool; the CLI `run` command and Telegram delivery
+    are unaffected.
+
+    `settings` is the seam the curation tool uses to inject its own resolved
+    Settings instance instead of letting run_curation reach back into the
+    lru_cache. Returning the effective limit is what stops the tool from
+    reconstructing it from a possibly-different Settings instance — the value
+    reported in the tool's summary is the value actually applied here.
 
     The Article -> CuratedArticle projection happens here, at the seam — that's
     what makes the boundary contract in app.orchestrator.schemas enforceable
     rather than decorative."""
-    settings = get_settings()
-    configure_langsmith_env(settings)
-    limit = _clamp_limit(limit, settings)
-    initial_state = _initial_state(dry_run=False, limit=limit)
+    _settings, effective_limit, initial_state = _bootstrap(
+        dry_run=False, limit=limit, settings=settings
+    )
 
     workflow = build_curation_workflow()
     final_state = await workflow.ainvoke(initial_state)
 
     articles = parse_articles(final_state.get("articles_selected"))
-    return [CuratedArticle.from_article(a) for a in articles]
+    return [CuratedArticle.from_article(a) for a in articles], effective_limit
 
 
 def main() -> None:

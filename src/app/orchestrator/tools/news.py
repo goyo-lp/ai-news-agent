@@ -9,12 +9,14 @@ full ranked-article list never rides through a subagent's context. This tool is
 where that boundary is enforced for the news product.
 
 Target environment: deepagents `create_deep_agent` (coordinator + subagents),
-which invokes tools asynchronously, so the tool is exposed with an async
-coroutine and a sync shim for parity with non-async tool callers.
+which invokes tools asynchronously, so the tool is exposed as an async
+coroutine only. A sync entry would need to run a fresh event loop and would
+refuse to nest inside the coordinator's already-running loop; rather than paper
+over that with a ThreadPoolExecutor, callers should invoke the tool via
+`await tool.ainvoke(...)` (which is what create_deep_agent does).
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from pathlib import Path
@@ -69,36 +71,20 @@ def write_articles_to_state(articles: list[CuratedArticle], data_dir: str) -> Pa
 async def _fetch_and_write(limit: int | None, settings: Settings) -> dict[str, Any]:
     """Async implementation: run the curation pipeline, then persist the
     resulting boundary articles and return a compressed summary. Centralizing
-    the summary shape here is what keeps the tool's return contract stable
-    regardless of how the caller invokes it."""
-    articles = await run_curation(limit=limit)
+    the summary shape here is what keeps the tool's return contract stable.
 
-    cap = settings.max_articles_per_run
-    resolved_limit = cap if limit is None else limit
+    `limit_used` comes straight from run_curation — never reconstructed from
+    `settings.max_articles_per_run` — so the reported value is the value
+    actually applied, even if a caller injected settings that differ from the
+    lru_cache."""
+    articles, effective_limit = await run_curation(limit=limit, settings=settings)
     path = write_articles_to_state(articles, settings.orchestrator_data_dir)
 
     return {
         "count": len(articles),
-        "limit_used": min(resolved_limit, cap),
+        "limit_used": effective_limit,
         "path": str(path),
     }
-
-
-def _sync_fetch_and_write(limit: int | None, settings: Settings) -> dict[str, Any]:
-    """Sync shim around the async impl. The deep agent calls tools async, but
-    StructuredTool requires a sync entry too; bridge with asyncio.run on the
-    caller's thread. If a loop is already running on this thread, fall back to
-    scheduling + spinning: an unusual path, but keeps the tool callable from a
-    sync REPL inside an event loop without raising RuntimeError."""
-    try:
-        return asyncio.run(_fetch_and_write(limit, settings))
-    except RuntimeError:
-        # `asyncio.run` refuses to nest; run on a dedicated loop on a worker
-        # thread so we don't touch the caller's running loop.
-        import concurrent.futures
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(asyncio.run, _fetch_and_write(limit, settings)).result()
 
 
 def build_fetch_curated_ai_news_tool(
@@ -109,13 +95,10 @@ def build_fetch_curated_ai_news_tool(
     Settings are resolved lazily on first call when not supplied, so the tool
     picks up .env loaded after the tool was built (the common case at process
     startup). Supplying settings explicitly is the seam tests use to inject a
-    fixed config without touching the lru_cache."""
+    fixed config without touching the lru_cache. Those same settings are
+    threaded into run_curation so the limit reported in the summary is the limit
+    the pipeline actually used."""
     bound_settings = settings
-
-    def _sync(limit: int | None = None) -> str:
-        s = bound_settings or get_settings()
-        result = _sync_fetch_and_write(limit, s)
-        return json.dumps(result, default=str)
 
     async def _async(limit: int | None = None) -> str:
         s = bound_settings or get_settings()
@@ -123,7 +106,7 @@ def build_fetch_curated_ai_news_tool(
         return json.dumps(result, default=str)
 
     return StructuredTool.from_function(
-        func=_sync,
+        func=None,
         coroutine=_async,
         name="fetch_curated_ai_news",
         description=(

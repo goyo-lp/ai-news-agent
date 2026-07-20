@@ -77,9 +77,12 @@ async def test_tool_factory_injects_settings_and_uses_its_data_dir(
 
     settings = Settings(_env_file=None, orchestrator_data_dir=str(tmp_path), max_articles_per_run=5)
 
-    async def fake_run_curation(limit: int | None = None) -> list[CuratedArticle]:
+    async def fake_run_curation(
+        limit: int | None = None, settings: Settings | None = None
+    ) -> tuple[list[CuratedArticle], int]:
         assert limit == 3
-        return [_curated("a1"), _curated("a2")]
+        assert settings is not None and settings.max_articles_per_run == 5
+        return [_curated("a1"), _curated("a2")], 3
 
     monkeypatch.setattr(tools_mod.news, "run_curation", fake_run_curation)
 
@@ -99,26 +102,28 @@ async def test_tool_clamps_limit_to_settings_max(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A model-supplied limit can't bypass the configured ceiling — the same
-    cap run_curation enforces."""
+    cap run_curation enforces. The reported `limit_used` is the effective
+    clamped value returned by run_curation, not a reconstruction."""
     from app.config import Settings
     from app.orchestrator import tools as tools_mod
 
     settings = Settings(_env_file=None, orchestrator_data_dir=str(tmp_path), max_articles_per_run=3)
 
-    captured: dict[str, Any] = {}
-
-    async def fake_run_curation(limit: int | None = None) -> list[CuratedArticle]:
-        captured["limit"] = limit
-        return []
+    async def fake_run_curation(
+        limit: int | None = None, settings: Settings | None = None
+    ) -> tuple[list[CuratedArticle], int]:
+        assert settings is not None
+        resolved = limit if limit is not None else settings.max_articles_per_run
+        effective = max(1, min(resolved, settings.max_articles_per_run))
+        return [], effective
 
     monkeypatch.setattr(tools_mod.news, "run_curation", fake_run_curation)
 
     tool = build_fetch_curated_ai_news_tool(settings)
     result = json.loads(await tool.ainvoke({"limit": 10_000}))
 
-    assert captured["limit"] == 10_000  # run_curation does the clamping
     assert result["count"] == 0
-    assert result["limit_used"] == 3  # min(10000, 3)
+    assert result["limit_used"] == 3
 
 
 async def test_tool_summary_omits_article_payload(
@@ -129,10 +134,12 @@ async def test_tool_summary_omits_article_payload(
     from app.config import Settings
     from app.orchestrator import tools as tools_mod
 
-    settings = Settings(_env_file=None, orchestrator_data_dir=str(tmp_path))
+    settings = Settings(_env_file=None, orchestrator_data_dir=str(tmp_path), max_articles_per_run=5)
 
-    async def fake_run_curation(limit: int | None = None) -> list[CuratedArticle]:
-        return [_curated("a1"), _curated("a2"), _curated("a3")]
+    async def fake_run_curation(
+        limit: int | None = None, settings: Settings | None = None
+    ) -> tuple[list[CuratedArticle], int]:
+        return [_curated("a1"), _curated("a2"), _curated("a3")], 5
 
     monkeypatch.setattr(tools_mod.news, "run_curation", fake_run_curation)
 
@@ -143,6 +150,50 @@ async def test_tool_summary_omits_article_payload(
     assert set(result) == {"count", "limit_used", "path"}
     assert result["count"] == 3
     assert "title" not in result_raw  # no article content in the summary
+
+
+async def test_tool_threads_injected_settings_into_run_curation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tool passes its injected Settings into run_curation — the seam that
+    stops the `limit_used` reconstruction bug. A mismatched get_settings() must
+    never be the source of the reported limit."""
+    from app.config import Settings, get_settings
+    from app.orchestrator import tools as tools_mod
+
+    injected = Settings(_env_file=None, orchestrator_data_dir=str(tmp_path), max_articles_per_run=2)
+    assert get_settings().max_articles_per_run != 2  # sanity: differs from cache
+
+    received: dict[str, Any] = {}
+
+    async def fake_run_curation(
+        limit: int | None = None, settings: Settings | None = None
+    ) -> tuple[list[CuratedArticle], int]:
+        received["settings"] = settings
+        assert settings is not None
+        effective = max(1, min(limit or settings.max_articles_per_run, settings.max_articles_per_run))
+        return [], effective
+
+    monkeypatch.setattr(tools_mod.news, "run_curation", fake_run_curation)
+
+    tool = build_fetch_curated_ai_news_tool(injected)
+    result = json.loads(await tool.ainvoke({"limit": 100}))
+
+    assert received["settings"] is injected
+    assert result["limit_used"] == 2
+
+
+def test_tool_sync_invoke_raises_not_implemented(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tool is async-only — sync invoke must fail loudly rather than spawn
+    a hidden event loop on a worker thread."""
+    from app.config import Settings
+
+    settings = Settings(_env_file=None, orchestrator_data_dir=str(tmp_path))
+    tool = build_fetch_curated_ai_news_tool(settings)
+    with pytest.raises(NotImplementedError):
+        tool.invoke({"limit": 1})
 
 
 def test_default_singleton_is_a_structured_tool() -> None:
