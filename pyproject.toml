@@ -19,6 +19,12 @@ dependencies = [
   "pydantic>=2,<3",
   "pydantic-settings>=2,<3",
   "PyYAML",
+  # Staged ahead of P0.2: deepagents provides the Graph builder the coordinator
+  # wires up; langchain/langchain-openai are its LLM/runtime peer deps. Added
+  # here so the lockfile is ready when the first consuming code lands.
+  "deepagents>=0.6.12",
+  "langchain>=1.3.14",
+  "langchain-openai>=1.3.5",
 ]
 
 [dependency-groups]
