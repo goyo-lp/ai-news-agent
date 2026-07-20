@@ -47,13 +47,23 @@ class Settings(BaseSettings):
     openrouter_site_url: str | None = None
     openrouter_app_name: str = "AI News Agent"
 
+    # Stage A technical-ranker model (Decision J: cheap, deterministic rank).
+    # Landed with its consumer — the technical_rank tool (P2.1). The legacy
+    # `openrouter_model` above stays the news pipeline's summarization model and
+    # is NOT repurposed as Stage A.
+    openrouter_stage_a_model: str = "openai/gpt-oss-120b"
+    openrouter_stage_a_secondary_model: str | None = None
+
+    # Cap on ranked topics the technical_rank tool writes per run. Landed with
+    # its consumer (P2.1); the coordinator also reads this when delegating.
+    max_topics_per_run: int = 5
+
     # Per-subagent model / Tavily / deep-agent / orchestration knob live with
     # their consumer (P2.3 tavily tools, P3.1 linkedin-voice, P4.* subagents,
     # P5.* coordinator). They are intentionally NOT pre-declared here: a knob
     # with no consumer is config dressed as code, and landing it before the
     # consumer exists pins defaults that may turn out wrong once the real
-    # reader is built. The legacy `openrouter_model` above remains the news
-    # pipeline's single model.
+    # reader is built.
 
     # Telegram — legacy top-level credentials. Kept as the backward-compatible
     # source for the `news` bot profile so the existing digest `run` path and
