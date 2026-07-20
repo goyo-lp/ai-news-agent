@@ -40,16 +40,14 @@ def test_settings_rejects_unknown_ported_knobs() -> None:
     pins the contract so a future PR landing a consumer cannot accidentally let
     extra pre-declared fields slip in.
 
-    Stage A models and `max_topics_per_run` now have a consumer (the
-    technical_rank tool, P2.1); the remaining ported knobs (Stage B, Tavily,
+    Stage A models + max_topics_per_run (P2.1 technical_rank) and Tavily knobs
+    (P2.3 tavily tools) now have consumers; the remaining ported knobs (Stage B,
     deep-agent bounds, orchestration limits) stay deferred until their consumer
     PRs land."""
     settings = Settings(_env_file=None)
     for removed in (
         "openrouter_stage_b_research_model",
         "openrouter_stage_b_writer_model",
-        "tavily_api_key",
-        "tavily_base_url",
         "deep_agent_enabled",
         "deep_agent_model",
         "deep_research_topic_concurrency",
@@ -60,6 +58,19 @@ def test_settings_rejects_unknown_ported_knobs() -> None:
         "style_samples_dir",
     ):
         assert not hasattr(settings, removed), f"{removed} should not be on Settings yet"
+
+
+def test_tavily_knobs_have_defaults() -> None:
+    """P2.3 lands the Tavily research-evidence knobs with their consumer. They
+    default such that dry-run works without an API key (the TavilyClient falls
+    back to mock_search / empty results when tavily_api_key is unset)."""
+    settings = Settings(_env_file=None)
+    assert settings.tavily_api_key is None
+    assert settings.tavily_base_url == "https://api.tavily.com"
+    assert settings.tavily_topic == "news"
+    assert settings.tavily_search_depth == "advanced"
+    assert settings.tavily_time_range == "day"
+    assert settings.tavily_http_concurrency == 6
 
 
 def test_stage_a_knobs_have_defaults() -> None:

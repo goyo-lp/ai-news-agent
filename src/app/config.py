@@ -58,12 +58,22 @@ class Settings(BaseSettings):
     # its consumer (P2.1); the coordinator also reads this when delegating.
     max_topics_per_run: int = 5
 
-    # Per-subagent model / Tavily / deep-agent / orchestration knob live with
-    # their consumer (P2.3 tavily tools, P3.1 linkedin-voice, P4.* subagents,
-    # P5.* coordinator). They are intentionally NOT pre-declared here: a knob
-    # with no consumer is config dressed as code, and landing it before the
-    # consumer exists pins defaults that may turn out wrong once the real
-    # reader is built.
+    # Tavily research-evidence knobs. Landed with their consumer — the
+    # tavily_search / tavily_extract tools (P2.3). Per Decision E, Tavily stays
+    # *only* as per-topic research evidence; the LinkedIn agent's own Tavily/RSS
+    # discovery path is dropped (discovery_* knobs are intentionally NOT ported).
+    tavily_api_key: str | None = None
+    tavily_base_url: str = "https://api.tavily.com"
+    tavily_topic: str = "news"
+    tavily_search_depth: str = "advanced"
+    tavily_time_range: str = "day"
+    tavily_http_concurrency: int = 6
+
+    # Per-subagent model / deep-agent / orchestration knobs live with their
+    # consumer (P3.1 linkedin-voice, P4.* subagents, P5.* coordinator). They are
+    # intentionally NOT pre-declared here: a knob with no consumer is config
+    # dressed as code, and landing it before the consumer exists pins defaults
+    # that may turn out wrong once the real reader is built.
 
     # Telegram — legacy top-level credentials. Kept as the backward-compatible
     # source for the `news` bot profile so the existing digest `run` path and
