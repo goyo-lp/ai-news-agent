@@ -42,12 +42,12 @@ def test_settings_rejects_unknown_ported_knobs() -> None:
 
     Stage A models + max_topics_per_run (P2.1 technical_rank), Tavily knobs
     (P2.3 tavily tools), verifier knobs (P2.4 verify_claim), and the
-    style-profile paths (P3.2 load_style_profile) now have consumers; the
-    remaining ported knobs (Stage B, deep-agent bounds, orchestration limits)
-    stay deferred until their consumer PRs land."""
+    style-profile paths (P3.2 load_style_profile), and the Stage-B research
+    model (P4.1 research-subagent) now have consumers; the remaining ported
+    knobs (Stage-B writer, deep-agent bounds, orchestration limits) stay
+    deferred until their consumer PRs land."""
     settings = Settings(_env_file=None)
     for removed in (
-        "openrouter_stage_b_research_model",
         "openrouter_stage_b_writer_model",
         "deep_agent_enabled",
         "deep_agent_model",
@@ -65,6 +65,13 @@ def test_style_profile_knobs_have_defaults() -> None:
     settings = Settings(_env_file=None)
     assert settings.style_profile_file == "data/style_profile.json"
     assert settings.style_samples_dir == "data/style_samples"
+
+
+def test_stage_b_research_model_has_default() -> None:
+    """P4.1 lands the Stage-B research model with its consumer (research-subagent).
+    Distinct from the news summarizer and the Stage-A ranker."""
+    settings = Settings(_env_file=None)
+    assert settings.openrouter_stage_b_research_model == "anthropic/claude-sonnet-4.5"
 
 
 def test_verifier_knobs_have_defaults() -> None:

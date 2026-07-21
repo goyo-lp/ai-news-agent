@@ -79,6 +79,13 @@ class Settings(BaseSettings):
     verification_concurrency: int = 4
     verification_sources_per_topic: int = 3
 
+    # Stage-B research subagent model (Decision J: agentic tool use — the
+    # research subagent decides whether to fetch the real article, what to
+    # verify, and what's technically new). Landed with its consumer — the
+    # research subagent (P4.1). Distinct from the news summarizer and the cheap
+    # Stage-A ranker; the writer's Stage-B model lands separately with P4.2.
+    openrouter_stage_b_research_model: str = "anthropic/claude-sonnet-4.5"
+
     # Style-profile loader knobs. Landed with their consumer — the
     # load_style_profile tool (P3.2). `style_profile_file` is the seed profile
     # the loader reads by default; `style_samples_dir` holds the author's
