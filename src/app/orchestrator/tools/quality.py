@@ -15,7 +15,7 @@ cleaned text back to the writer — the cleaner is deterministic, so the writer
 sees what the gate saw.
 
 Target environment: deepagents ``create_deep_agent`` — async-only tool, same
-sibling pattern as news / technical_rank / fetch_article / tavily / verify_claim.
+sibling pattern as news / technical_rank / fetch_article / web / verify_claim.
 """
 from __future__ import annotations
 

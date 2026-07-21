@@ -24,9 +24,9 @@ gaps don't drift silently):
   3. ``verification_concurrency`` and ``verification_sources_per_topic`` land
      here with their consumer (the verifier driver), per the repo's pinned
      "knob-with-no-consumer" policy.
-  4. Reuses the host's search client (``TavilyClient.search_news``, P2.3) and
-     the keyless local ``extract_url_texts`` (SSRF-guarded fetch + trafilatura)
-     rather than the reference's Tavily extract endpoint. The verifier does
+  4. Reuses the host's search client (``SearxngClient.search_news``) and the
+     keyless local ``extract_url_texts`` (SSRF-guarded fetch + trafilatura)
+     rather than the reference's Tavily search/extract endpoints. The verifier does
      *not* route these through the orchestrator tools — it calls the search
      client / extractor directly. Structured evidence stays in-memory (it's not
      the artifact on disk — the *brief* is the artifact); the research
@@ -46,20 +46,20 @@ import httpx
 
 from app.config import Settings
 from app.orchestrator.schemas import ResearchBrief
-from app.orchestrator.services.tavily_client import TavilyClient
+from app.orchestrator.services.searxng_client import SearxngClient
 from app.orchestrator.services.web_extract import extract_url_texts
 
 logger = logging.getLogger(__name__)
 
 
 class BriefVerifier:
-    """Verify one or more :class:`ResearchBrief` instances against Tavily
-    evidence + an OpenRouter fact-checking model. Constructed with
-    ``Settings``; reuses the host Tavily client."""
+    """Verify one or more :class:`ResearchBrief` instances against independently
+    gathered evidence (SearXNG search + local trafilatura extraction) + an
+    OpenRouter fact-checking model. Constructed with ``Settings``."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.tavily_client = TavilyClient(settings)
+        self.search_client = SearxngClient(settings)
 
     async def verify_briefs(
         self,
@@ -140,7 +140,7 @@ class BriefVerifier:
 
         queries = _build_verifier_queries(brief)
         search_tasks = [
-            self.tavily_client.search_news(
+            self.search_client.search_news(
                 client=client,
                 query=query,
                 hours_back=hours_back,

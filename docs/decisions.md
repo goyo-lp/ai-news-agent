@@ -12,8 +12,10 @@ build on the choices below.
 ## A — Where it lives
 Evolve the AI News Agent repo into the coordinator. Its 5-node news pipeline is reused
 in-process as the `fetch_curated_ai_news` tool — no cross-repo packaging. The LinkedIn logic is
-ported in (Tavily, verifier, technical ranker, style profile, post generation, deep-agent
-layer), each module vendored alongside the tool/subagent that wraps it.
+ported in (web research, verifier, technical ranker, style profile, post generation, deep-agent
+layer), each module vendored alongside the tool/subagent that wraps it. (The reference used
+Tavily; the host replaced it with keyless SearXNG search + local trafilatura extraction — see
+Decision E.)
 
 Source copied to `reference/linkedin-agent/`. Trade-off: more porting, but the news producer
 needs zero packaging and the plan lives here.
@@ -37,8 +39,15 @@ LinkedIn proposals are a second product, not a replacement.
 
 ## E — Topic source
 The News Agent RSS pipeline is the sole producer. `ingest → enrich → rank → dedupe` feeds
-`technical_rank`. The LinkedIn agent's own Tavily/RSS discovery is dropped; Tavily stays only as
+`technical_rank`. The LinkedIn agent's own discovery is dropped; web search stays only as
 per-topic research evidence.
+
+**No paid dependencies (besides LLM cost).** Research evidence uses only keyless/self-hosted
+tools: `web_search` runs against a self-hosted **SearXNG** instance (`docker-compose.searxng.yml`;
+`SEARXNG_BASE_URL`, empty → dry-run mock), and `web_extract` fetches article text locally via the
+SSRF-guarded fetch + **trafilatura** — no Tavily, no API keys. Corroboration leans first on the
+RSS cluster's `supporting_urls` (independent sources we already have from clustering), with
+SearXNG as the fallback when the cluster is thin.
 
 ## F — Migration style
 Full rebuild per this plan. Build the coordinator + research/writer subagents fresh, prove
@@ -84,14 +93,15 @@ structurally; only the defaults are unified.
 4. **Preserve the Stage A / Stage B model split** via per-subagent model overrides — each tier
    keeps its own knob so it can diverge later, even though Decision J now defaults them all to
    one model.
-5. **Reuse, don't rewrite.** The news pipeline, SSRF-guarded fetch, Tavily client, Telegram
-   client, and style profile are assets — wrap them.
+5. **Reuse, don't rewrite.** The news pipeline, SSRF-guarded fetch, SearXNG search + local
+   trafilatura extraction, Telegram client, and style profile are assets — wrap them.
 6. **Every change ships as a ≤500-LOC PR with tests.** Dry-run parity against the old pipeline
    before any cutover.
 
 ## Reuse inventory
 
-`run_curation` (News Agent), `http_utils.py` (SSRF + size cap), `tavily_client.py`,
+`run_curation` (News Agent), `http_utils.py` (SSRF + size cap), `searxng_client.py` +
+`web_extract.py` (keyless search + local extraction),
 `brief_verifier.py`, `technical_ranker.py` / `scoring.py`, `quality_gate`, `style_profile.py`,
 `telegram_client.py`, `api_usage_tracker.py`. The plan wraps every one of these rather than
 reimplementing it — all now vendored in-repo at `reference/linkedin-agent/` for the port.

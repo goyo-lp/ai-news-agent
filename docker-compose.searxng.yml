@@ -1,0 +1,20 @@
+# Self-hosted SearXNG for the research `web_search` tool — keyless, no billing.
+#
+#   docker compose -f docker-compose.searxng.yml up -d
+#
+# Then set SEARXNG_BASE_URL=http://localhost:8080 in your .env. The JSON API the
+# tool uses is enabled in ./searxng/settings.yml (SearXNG ships with JSON off by
+# default). Leave SEARXNG_BASE_URL empty to run without an instance (the tool
+# returns deterministic dry-run mock results).
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: ai-news-searxng
+    ports:
+      # bind to localhost only — this is an unauthenticated metasearch proxy
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+    restart: unless-stopped

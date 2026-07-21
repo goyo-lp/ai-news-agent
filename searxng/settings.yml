@@ -1,0 +1,19 @@
+# Minimal SearXNG settings for the AI News Agent's research `web_search` tool.
+# Merges over SearXNG's shipped defaults (use_default_settings: true), overriding
+# only what the tool needs:
+#   - the JSON output format (off by default), so GET /search?format=json works
+#   - the request limiter off, so the local programmatic client isn't rate-limited
+#
+# Change `secret_key` to any long random string before exposing this instance
+# beyond localhost.
+use_default_settings: true
+
+server:
+  secret_key: "change-me-to-a-long-random-string"
+  limiter: false
+  image_proxy: false
+
+search:
+  formats:
+    - html
+    - json

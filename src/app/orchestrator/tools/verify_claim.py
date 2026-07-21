@@ -1,8 +1,9 @@
 """verify_claim — the coordinator's brief-fact-checking tool.
 
 Wraps :func:`app.orchestrator.services.brief_verifier.BriefVerifier.verify_one`
-to verify a single :class:`ResearchBrief` against independently gathered
-Tavily evidence + an OpenRouter fact-checking model. The research subagent
+to verify a single :class:`ResearchBrief` against independently gathered web
+evidence (SearXNG search + local extraction) + an OpenRouter fact-checking
+model. The research subagent
 (P4.1) invokes this once per brief it produces — the brief researched from
 the curated news (and possibly the fetched real article) is double-checked
 before it's handed to the writer subagent.
@@ -21,7 +22,7 @@ status enum matches :class:`ResearchBrief.verification_status` (verified /
 partially_verified / insufficient_evidence / failed).
 
 Target environment: deepagents ``create_deep_agent`` — async-only tool, same
-pattern siblings as news / technical_rank / fetch_article / tavily.
+pattern siblings as news / technical_rank / fetch_article / web.
 """
 from __future__ import annotations
 
@@ -64,7 +65,7 @@ class VerifyClaimArgs(BaseModel):
         default=None,
         description=(
             "Hours back to search for corroborating evidence. Omit to use the "
-            "verifier's default (~24h, clamped to Tavily's [1, 7] days)."
+            "verifier's default (~24h; maps to SearXNG's day/week/month bucket)."
         ),
     )
 
@@ -227,7 +228,7 @@ def build_verify_claim_tool(settings: Settings | None = None) -> StructuredTool:
         name="verify_claim",
         description=(
             "Verify one research brief (briefs/<topic_id>.json) against "
-            "independent Tavily evidence + an OpenRouter fact-checking model, "
+            "independent web evidence + an OpenRouter fact-checking model, "
             "and write the post-verification brief to "
             "briefs/<topic_id>.verified.json. Returns a JSON summary with "
             "{topic_id, verification_status, verification_confidence, "
