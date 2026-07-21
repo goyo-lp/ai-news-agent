@@ -2,8 +2,9 @@
 (``reference/linkedin-agent/src/app/services/brief_verifier.py``).
 
 Verifies a :class:`ResearchBrief` (headline, summary, technical/business
-claims) against independently gathered evidence: per-brief Tavily queries +
-extracts, reconciled with an OpenRouter fact-checking model. The result is a
+claims) against independently gathered evidence: per-brief search queries +
+local article-text extraction, reconciled with an OpenRouter fact-checking
+model. The result is a
 copy of the input brief with ``verification_status`` /
 ``verification_confidence`` / ``verification_notes`` set, plus conservatively
 rewritten ``summary`` / ``technical_significance`` / ``business_impact`` /
@@ -23,12 +24,12 @@ gaps don't drift silently):
   3. ``verification_concurrency`` and ``verification_sources_per_topic`` land
      here with their consumer (the verifier driver), per the repo's pinned
      "knob-with-no-consumer" policy.
-  4. Reuses the host's :class:`app.orchestrator.services.tavily_client.TavilyClient`
-     (just landed in P2.3) rather than the reference's. The verifier does
-     *not* route Tavily calls through the orchestrator tools — the
-     :class:`httpx.AsyncClient` it constructs is passed to ``search_news`` /
-     ``extract_contents`` directly. Structured evidence stays in-memory (it's
-     not the artifact on disk — the *brief* is the artifact); the research
+  4. Reuses the host's search client (``TavilyClient.search_news``, P2.3) and
+     the keyless local ``extract_url_texts`` (SSRF-guarded fetch + trafilatura)
+     rather than the reference's Tavily extract endpoint. The verifier does
+     *not* route these through the orchestrator tools — it calls the search
+     client / extractor directly. Structured evidence stays in-memory (it's not
+     the artifact on disk — the *brief* is the artifact); the research
      subagent's filesystem write is the brief. This matches the plan's
      guiding-principle #3 reading: structured *data* lives on disk, transient
      inter-call evidence byproducts don't.
@@ -46,6 +47,7 @@ import httpx
 from app.config import Settings
 from app.orchestrator.schemas import ResearchBrief
 from app.orchestrator.services.tavily_client import TavilyClient
+from app.orchestrator.services.web_extract import extract_url_texts
 
 logger = logging.getLogger(__name__)
 
@@ -147,11 +149,7 @@ class BriefVerifier:
             )
             for query in queries
         ]
-        base_extract_task = self.tavily_client.extract_contents(
-            client=client,
-            urls=base_urls,
-            dry_run=dry_run,
-        )
+        base_extract_task = extract_url_texts(base_urls, self.settings, dry_run=dry_run)
         gathered_searches = (
             await asyncio.gather(*search_tasks, return_exceptions=True) if search_tasks else []
         )
@@ -177,11 +175,7 @@ class BriefVerifier:
         evidence_urls = evidence_urls[: max(3, self.settings.verification_sources_per_topic + 1)]
 
         delta_urls = [url for url in evidence_urls if url not in base_urls]
-        delta_extracted = await self.tavily_client.extract_contents(
-            client=client,
-            urls=delta_urls,
-            dry_run=dry_run,
-        )
+        delta_extracted = await extract_url_texts(delta_urls, self.settings, dry_run=dry_run)
         extracted = {**base_extracted, **delta_extracted}
 
         evidence_texts: list[str] = []

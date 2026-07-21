@@ -19,9 +19,9 @@ def _settings(api_key: str | None = None) -> Settings:
 
 
 def _client_with(handler) -> httpx.AsyncClient:
-    """A real httpx.AsyncClient with a MockTransport — search_news /
-    extract_contents take an injected client argument, so we just pass this in
-    rather than patching global httpx construction."""
+    """A real httpx.AsyncClient with a MockTransport — search_news takes an
+    injected client argument, so we just pass this in rather than patching
+    global httpx construction."""
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
@@ -119,84 +119,9 @@ async def test_search_news_raises_on_http_status_failure() -> None:
             await client.search_news(http, "q", hours_back=24, max_results=2, dry_run=False)
 
 
-# --- extract_contents -------------------------------------------------------
-
-
-async def test_extract_contents_dry_run_returns_mock_text_per_url() -> None:
-    settings = _settings(api_key=None)
-    client = TavilyClient(settings)
-    async with httpx.AsyncClient() as http:
-        result = await client.extract_contents(
-            http,
-            ["https://a.example/x", "https://b.example/y", "https://a.example/x"],
-            dry_run=True,
-        )
-    # de-dup by normalized url -> two entries.
-    assert set(result) == {"https://a.example/x", "https://b.example/y"}
-    assert all(v == "Dry-run mock content." for v in result.values())
-
-
-async def test_extract_contents_no_key_in_non_dry_run_returns_empty_dict() -> None:
-    settings = _settings(api_key=None)
-    client = TavilyClient(settings)
-    async with httpx.AsyncClient() as http:
-        result = await client.extract_contents(http, ["https://a.example/x"], dry_run=False)
-    assert result == {}
-
-
-async def test_extract_contents_empty_input_short_circuits_without_network() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"results": []})  # should never be called
-
-    settings = _settings(api_key="sk-test")
-    client = TavilyClient(settings)
-    async with _client_with(handler) as http:
-        result = await client.extract_contents(http, [], dry_run=False)
-    assert result == {}
-
-
-async def test_extract_contents_parses_endpoint_response() -> None:
-    response = {
-        "results": [
-            {"url": "https://a.example/x", "raw_content": "Long text A."},
-            {"url": "https://b.example/y", "content": "Long text B."},
-            {"url": "https://c.example/z", "text": "Long text C."},
-            {"url": "", "text": "no url"},  # dropped: missing url
-        ]
-    }
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=response)
-
-    settings = _settings(api_key="sk-test")
-    client = TavilyClient(settings)
-    async with _client_with(handler) as http:
-        result = await client.extract_contents(
-            http,
-            ["https://a.example/x", "https://b.example/y", "https://c.example/z"],
-            dry_run=False,
-        )
-    assert result == {
-        "https://a.example/x": "Long text A.",
-        "https://b.example/y": "Long text B.",
-        "https://c.example/z": "Long text C.",
-    }
-
-
-async def test_extract_contents_raises_on_endpoint_failure() -> None:
-    """P2.3 review MAJOR #2: endpoint failure now raises TavilyExtractError so
-    the tool layer distinguishes 'endpoint down' from 'endpoint answered, no
-    content' (which is success_count=0, status=ok)."""
-    from app.orchestrator.services.tavily_client import TavilyExtractError
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(500, json={"error": "boom"})
-
-    settings = _settings(api_key="sk-test")
-    client = TavilyClient(settings)
-    with pytest.raises(TavilyExtractError):
-        async with _client_with(handler) as http:
-            await client.extract_contents(http, ["https://a.example/x"], dry_run=False)
+# Note: article-text extraction is no longer a Tavily surface — it moved to the
+# keyless local app.orchestrator.services.web_extract (tested in
+# tests/test_web_extract.py).
 
 
 # --- _parse_datetime --------------------------------------------------------

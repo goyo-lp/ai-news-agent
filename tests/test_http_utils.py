@@ -55,6 +55,29 @@ async def test_get_capped_returns_response_within_limit() -> None:
     assert response.text == "hello world"
 
 
+async def test_get_capped_body_is_readable_after_streaming() -> None:
+    """Regression: get_capped consumes the body via aiter_bytes() (for the cap),
+    which leaves a real streaming response unreadable once the stream context
+    closes — `.text`/`.content` raise httpx.ResponseNotRead. Callers
+    (fetch_article, web_extract, OG enrichment, feed parsing) all read `.text`
+    afterward. Use an async-iterator body (NOT `text=`/`content=bytes`, which
+    preset `_content` and mask the bug) so the streaming read path is exercised."""
+
+    async def body() -> "object":
+        yield b"<html><body>"
+        yield b"real streamed content"
+        yield b"</body></html>"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body(), headers={"content-type": "text/html"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        response = await get_capped(client, "http://example.com", {}, max_bytes=1_000_000)
+
+    assert "real streamed content" in response.text
+    assert b"real streamed content" in response.content
+
+
 async def test_get_capped_raises_when_body_exceeds_max_bytes() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text="x" * 1000)

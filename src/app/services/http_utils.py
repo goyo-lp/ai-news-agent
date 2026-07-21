@@ -80,8 +80,16 @@ async def get_capped(
     async with client.stream("GET", url, headers=headers) as response:
         response.raise_for_status()
         downloaded = 0
+        chunks: list[bytes] = []
         async for chunk in response.aiter_bytes():
             downloaded += len(chunk)
             if downloaded > max_bytes:
                 raise ResponseTooLargeError(f"Response from {url} exceeded {max_bytes} bytes")
+            chunks.append(chunk)
+        # aiter_bytes() consumes the stream, so once the `stream()` context
+        # closes the returned response is unreadable — `.text`/`.content` raise
+        # httpx.ResponseNotRead. Populate `_content` (exactly what Response.read()
+        # does internally) from the chunks we already buffered for the cap check,
+        # so every caller can read the body it was handed.
+        response._content = b"".join(chunks)
     return response

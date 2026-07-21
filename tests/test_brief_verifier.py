@@ -65,6 +65,19 @@ def _patch_openrouter_httpx(monkeypatch: pytest.MonkeyPatch, response: dict[str,
     monkeypatch.setattr(svc_mod.httpx, "AsyncClient", _factory)
 
 
+def _stub_web_extract(monkeypatch: pytest.MonkeyPatch, mapping: dict[str, str] | None = None) -> None:
+    """Stub the local extractor so verifier tests never touch the network. The
+    real extract_url_texts (SSRF-guarded fetch + trafilatura) is covered in
+    test_web_extract.py; here only the verification logic matters. Returns text
+    only for URLs present in `mapping` (default: none)."""
+
+    async def _fake(urls: list[str], settings: Settings, *, dry_run: bool = False) -> dict[str, str]:
+        table = mapping or {}
+        return {u: table[u] for u in urls if u in table}
+
+    monkeypatch.setattr(svc_mod, "extract_url_texts", _fake)
+
+
 # --- helpers (deterministic) ------------------------------------------------
 
 
@@ -316,6 +329,7 @@ async def test_verify_one_real_call_parses_verifier_payload(monkeypatch: pytest.
         "notes": ["Two independent sources confirm.", "Benchmark numbers are comparable."],
     }
     _patch_openrouter_httpx(monkeypatch, verifier_payload)
+    _stub_web_extract(monkeypatch)
 
     verifier = BriefVerifier(settings)
     verified = await verifier.verify_one(_brief(), hours_back=24, dry_run=False)
@@ -346,6 +360,7 @@ async def test_verify_one_rejects_unknown_verdict_gracefully(
         "notes": [],
     }
     _patch_openrouter_httpx(monkeypatch, verifier_payload)
+    _stub_web_extract(monkeypatch)
 
     verifier = BriefVerifier(settings)
     verified = await verifier.verify_one(_brief(), hours_back=24, dry_run=False)
@@ -374,6 +389,7 @@ async def test_verify_briefs_per_brief_failure_degrades_to_cautious_fallback(
         return real(**kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(svc_mod.httpx, "AsyncClient", _factory)
+    _stub_web_extract(monkeypatch)
 
     verifier = BriefVerifier(settings)
     briefs = [_brief("t1"), _brief("t2")]

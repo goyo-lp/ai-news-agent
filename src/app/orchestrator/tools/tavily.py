@@ -1,21 +1,21 @@
-"""tavily_search / tavily_extract — the coordinator's research-evidence tools.
+"""tavily_search / web_extract — the coordinator's research-evidence tools.
 
-Wraps :class:`app.orchestrator.services.tavily_client.TavilyClient` as two
-langchain ``StructuredTool`` instances. Per Decision E, Tavily stays *only* as
-per-topic research evidence (the research subagent verifies a brief by
-running a focused query, optionally extracting the URLs it finds); the
-LinkedIn agent's own Tavily/RSS discovery path is dropped.
+`tavily_search` still wraps
+:class:`app.orchestrator.services.tavily_client.TavilyClient` (search moves to
+self-hosted SearXNG in the next PR). `web_extract` now wraps the keyless local
+:func:`app.orchestrator.services.web_extract.extract_url_texts` (SSRF-guarded
+fetch + trafilatura) instead of Tavily's paid ``/extract`` endpoint. Per
+Decision E, this stays *only* as per-topic research evidence (the research
+subagent verifies a brief by running a focused query, then extracting the URLs
+it finds); the LinkedIn agent's own discovery path is dropped.
 
 Both tools follow the news / technical_rank / fetch_article pattern:
 async-only ``StructuredTool``, factory with lazily-resolved settings
 (tests inject directly), structured data persists to the orchestrator data
-dir under ``tavily/``, the return value is a compressed JSON summary
-(guiding principle #3) — never the result list or extracted text.
-
-The mock/dry-run path in TavilyClient means a subagent exercising these
-tools without ``TAVILY_API_KEY`` still gets stable training data — the
-research subagent safety net (P4.1) can iterate without an API key during
-dev.
+dir, the return value is a compressed JSON summary (guiding principle #3) —
+never the result list or extracted text. `web_extract` does real local
+extraction with no dry-run mock, matching fetch_article; `tavily_search` still
+mocks when ``TAVILY_API_KEY`` is unset so a subagent can iterate keyless.
 """
 from __future__ import annotations
 
@@ -33,15 +33,18 @@ from app.config import Settings, get_settings
 from app.orchestrator.services.ranking import DiscoveredItem
 from app.orchestrator.services.tavily_client import (
     TavilyClient,
-    TavilyExtractError,
     TavilySearchError,
 )
+from app.orchestrator.services.web_extract import extract_url_texts
 from app.services.rss_client import normalize_url
 
 logger = logging.getLogger(__name__)
 
 _TAVILY_SUBDIR = "tavily"
 _SEARCH_SUBDIR = "search"
+# Extraction is no longer a Tavily surface (it's local trafilatura), so its
+# artifacts land under a provider-neutral `web/extracted/` dir.
+_WEB_SUBDIR = "web"
 _EXTRACT_SUBDIR = "extracted"
 
 
@@ -175,13 +178,13 @@ def build_tavily_search_tool(settings: Settings | None = None) -> StructuredTool
 # ---------------------------------------------------------------------------
 
 
-class TavilyExtractArgs(BaseModel):
+class WebExtractArgs(BaseModel):
     """Tool input. `urls` is required and non-empty; an empty list short-circuits
-    to an empty-result summary rather than calling the extract endpoint."""
+    to an empty-result summary rather than fetching anything."""
 
     urls: list[str] = Field(
         ...,
-        description="List of absolute http(s) URLs to extract cleaned text for via Tavily's extract endpoint.",
+        description="List of absolute http(s) URLs to extract cleaned article text for.",
     )
 
 
@@ -197,7 +200,7 @@ async def _run_extract(args: dict[str, Any], settings: Settings) -> dict[str, An
         }
 
     # Normalize + dedupe at the tool layer so url_count and success_count
-    # share one definition of 'URL' (the deduped set). extract_contents also
+    # share one definition of 'URL' (the deduped set). extract_url_texts also
     # dedupes internally as defense-in-depth; the duplicate work is free.
     seen: set[str] = set()
     urls: list[str] = []
@@ -216,28 +219,14 @@ async def _run_extract(args: dict[str, Any], settings: Settings) -> dict[str, An
             "path": None,
         }
 
-    dry_run = not (settings.tavily_api_key or "").strip()
-    client = TavilyClient(settings)
-    timeout = httpx.Timeout(settings.request_timeout_seconds)
-
+    # Real local extraction (SSRF-guarded fetch + trafilatura); no dry-run mock,
+    # matching the fetch_article tool. Per-URL failures are skipped inside the
+    # service, so the normal path is always ok with success_count reflecting how
+    # many URLs yielded text; only an unexpected service-level exception errors.
     try:
-        async with httpx.AsyncClient(timeout=timeout) as http:
-            extracted = await client.extract_contents(
-                client=http, urls=urls, dry_run=dry_run
-            )
-    except TavilyExtractError as exc:
-        # Endpoint failed outright (HTTP/transport/JSON) — distinct from
-        # 'endpoint answered, no content' (success_count=0, status=ok below).
-        logger.warning("tavily_extract endpoint failed: %s", exc)
-        return {
-            "url_count": len(urls),
-            "success_count": 0,
-            "status": "error",
-            "reason": str(exc),
-            "path": None,
-        }
+        extracted = await extract_url_texts(urls, settings)
     except Exception as exc:
-        logger.warning("tavily_extract unexpected: %s", exc)
+        logger.warning("web_extract unexpected: %s", exc)
         return {
             "url_count": len(urls),
             "success_count": 0,
@@ -257,23 +246,23 @@ async def _run_extract(args: dict[str, Any], settings: Settings) -> dict[str, An
 
 
 def write_extract_to_state(extracted: dict[str, str], urls: list[str], data_dir: str) -> Path:
-    """Serialize a Tavily extract batch to ``tavily/extracted/<batch-slug>.json``
-    as ``{urls: [...], results: {url: text}}`` and return the written path.
-    The batch slug is keyed on the full input set so the same batch re-runs
-    overwrite (idempotent); different batches land in different files because
-    the slug is the sha256 of the joined URL list."""
-    root = Path(data_dir) / _TAVILY_SUBDIR / _EXTRACT_SUBDIR
+    """Serialize an extract batch to ``web/extracted/<batch-slug>.json`` as
+    ``{urls: [...], results: {url: text}}`` and return the written path. The
+    batch slug is keyed on the full input set so the same batch re-runs overwrite
+    (idempotent); different batches land in different files because the slug is
+    the sha256 of the joined URL list."""
+    root = Path(data_dir) / _WEB_SUBDIR / _EXTRACT_SUBDIR
     root.mkdir(parents=True, exist_ok=True)
     slug = _slug("\n".join(urls))
     path = root / f"{slug}.json"
     payload = {"urls": urls, "results": extracted}
     path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-    logger.info("Wrote Tavily extract batch (%d/%d urls) to %s", len(extracted), len(urls), path)
+    logger.info("Wrote web extract batch (%d/%d urls) to %s", len(extracted), len(urls), path)
     return path
 
 
-def build_tavily_extract_tool(settings: Settings | None = None) -> StructuredTool:
-    """Construct the tavily_extract langchain tool."""
+def build_web_extract_tool(settings: Settings | None = None) -> StructuredTool:
+    """Construct the web_extract langchain tool."""
     bound_settings = settings
 
     async def _async(urls: list[str]) -> str:
@@ -284,22 +273,22 @@ def build_tavily_extract_tool(settings: Settings | None = None) -> StructuredToo
     return StructuredTool.from_function(
         func=None,
         coroutine=_async,
-        name="tavily_extract",
+        name="web_extract",
         description=(
-            "Extract cleaned per-URL text via Tavily's extract endpoint and "
-            "persist the batch to tavily/extracted/<batch-slug>.json as "
+            "Extract cleaned per-URL article text locally (SSRF-guarded fetch + "
+            "readability extraction — no API key, no third-party service) and "
+            "persist the batch to web/extracted/<batch-slug>.json as "
             "{urls: [...], results: {url: text}}. Returns a JSON summary with "
             "{url_count, success_count, status, reason, path} — never the "
             "extracted text. Read it from `path` when `status == \"ok\"`. "
-            "status values: ok (endpoint answered; success_count may be 0 when "
-            "no URL had extractable content), error (endpoint down / "
-            "HTTP failure / unexpected exception — `reason` is set, no artifact). "
-            "Dry-run (no TAVILY_API_KEY) returns mock text per URL."
+            "status is ok (success_count is how many URLs yielded text; may be 0 "
+            "when none did) or error (unexpected failure — `reason` set, no "
+            "artifact). A single unreachable/blocked URL is skipped, not an error."
         ),
-        args_schema=TavilyExtractArgs,
+        args_schema=WebExtractArgs,
     )
 
 
 # Convenience singletons for `create_deep_agent(tools=[...])`.
 tavily_search_tool = build_tavily_search_tool()
-tavily_extract_tool = build_tavily_extract_tool()
+web_extract_tool = build_web_extract_tool()

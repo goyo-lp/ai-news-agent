@@ -77,7 +77,7 @@ def test_subagent_wires_exactly_the_research_tools() -> None:
     assert tool_names == {
         "fetch_article",
         "tavily_search",
-        "tavily_extract",
+        "web_extract",
         "verify_claim",
     }
 
