@@ -47,11 +47,13 @@ class Settings(BaseSettings):
     openrouter_site_url: str | None = None
     openrouter_app_name: str = "AI News Agent"
 
-    # Stage A technical-ranker model (Decision J: cheap, deterministic rank).
-    # Landed with its consumer — the technical_rank tool (P2.1). The legacy
-    # `openrouter_model` above stays the news pipeline's summarization model and
-    # is NOT repurposed as Stage A.
-    openrouter_stage_a_model: str = "openai/gpt-oss-120b"
+    # Stage A technical-ranker model. Landed with its consumer — the
+    # technical_rank tool (P2.1). Decision J now standardizes every agent model
+    # on deepseek/deepseek-v4-flash (the same model the news pipeline uses); the
+    # per-tier knobs are kept as separate override points, not because the
+    # defaults differ. The legacy `openrouter_model` above is still the news
+    # pipeline's own summarization knob and is NOT repurposed as Stage A.
+    openrouter_stage_a_model: str = "deepseek/deepseek-v4-flash"
     openrouter_stage_a_secondary_model: str | None = None
 
     # Cap on ranked topics the technical_rank tool writes per run. Landed with
@@ -70,26 +72,27 @@ class Settings(BaseSettings):
     tavily_http_concurrency: int = 6
 
     # Verifier model + bounds. Landed with their consumer — the verify_claim
-    # tool (P2.4). Distinct from `openrouter_model` (the news summarizer) so
-    # the verifier fact-checker doesn't silently couple to the news pipeline's
-    # model; the optional secondary drives the ensemble path (strictest-wins
-    # reconciliation).
-    openrouter_verifier_model: str = "anthropic/claude-haiku-4.5"
+    # tool (P2.4). Kept as its own knob (not a reuse of `openrouter_model`) so
+    # the verifier can be pointed at a different model without disturbing the
+    # news summarizer; the Decision J default is deepseek/deepseek-v4-flash. The
+    # optional secondary drives the ensemble path (strictest-wins reconciliation).
+    openrouter_verifier_model: str = "deepseek/deepseek-v4-flash"
     openrouter_verifier_secondary_model: str | None = None
     verification_concurrency: int = 4
     verification_sources_per_topic: int = 3
 
-    # Stage-B research subagent model (Decision J: agentic tool use — the
-    # research subagent decides whether to fetch the real article, what to
-    # verify, and what's technically new). Landed with its consumer — the
-    # research subagent (P4.1). Distinct from the news summarizer and the cheap
-    # Stage-A ranker; the writer's Stage-B model lands separately with P4.2.
-    openrouter_stage_b_research_model: str = "anthropic/claude-sonnet-4.5"
+    # Stage-B research subagent model (the research subagent decides whether to
+    # fetch the real article, what to verify, and what's technically new).
+    # Landed with its consumer — the research subagent (P4.1). Its own knob so
+    # the research tier can be upgraded independently; the Decision J default is
+    # deepseek/deepseek-v4-flash.
+    openrouter_stage_b_research_model: str = "deepseek/deepseek-v4-flash"
 
-    # Stage-B writer subagent model (Decision J: voice quality is the product,
-    # and ~5 posts/run makes the cost delta trivial, so the writer gets the
-    # strongest model). Landed with its consumer — the writer subagent (P4.2).
-    openrouter_stage_b_writer_model: str = "anthropic/claude-opus-4.1"
+    # Stage-B writer subagent model. Landed with its consumer — the writer
+    # subagent (P4.2). Voice quality is the product, so this is the knob to
+    # upgrade first if a stronger model is warranted; the Decision J default is
+    # deepseek/deepseek-v4-flash.
+    openrouter_stage_b_writer_model: str = "deepseek/deepseek-v4-flash"
 
     # Skills source directory (contains linkedin-voice/SKILL.md). The writer
     # subagent (P4.2) passes this to SkillsMiddleware. Landed with its consumer.

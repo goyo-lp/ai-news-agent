@@ -68,27 +68,29 @@ def test_style_profile_knobs_have_defaults() -> None:
 
 def test_stage_b_research_model_has_default() -> None:
     """P4.1 lands the Stage-B research model with its consumer (research-subagent).
-    Distinct from the news summarizer and the Stage-A ranker."""
+    Decision J standardizes every agent model on deepseek/deepseek-v4-flash; the
+    knob stays separate so the research tier can be overridden independently."""
     settings = Settings(_env_file=None)
-    assert settings.openrouter_stage_b_research_model == "anthropic/claude-sonnet-4.5"
+    assert settings.openrouter_stage_b_research_model == "deepseek/deepseek-v4-flash"
 
 
 def test_stage_b_writer_knobs_have_defaults() -> None:
     """P4.2 lands the Stage-B writer model + skills dir with their consumer
-    (writer-subagent). The writer gets the strongest model (Decision J)."""
+    (writer-subagent). Decision J default is deepseek/deepseek-v4-flash; the
+    writer knob is the one to upgrade first if voice quality warrants it."""
     settings = Settings(_env_file=None)
-    assert settings.openrouter_stage_b_writer_model == "anthropic/claude-opus-4.1"
+    assert settings.openrouter_stage_b_writer_model == "deepseek/deepseek-v4-flash"
     assert settings.skills_dir == "skills"
 
 
 def test_verifier_knobs_have_defaults() -> None:
     """P2.4 lands the verifier model + bounds with their consumer. The verifier
-    model is distinct from `openrouter_model` (the news summarizer) — the
-    reference had reused openrouter_model for both, silently coupling two
-    unrelated products. Ensemble / concurrency bounds default to single-model /
-    4-parallel."""
+    keeps its own knob (not a reuse of `openrouter_model`) so it can be pointed
+    elsewhere without disturbing the news summarizer; the Decision J default is
+    deepseek/deepseek-v4-flash. Ensemble / concurrency bounds default to
+    single-model / 4-parallel."""
     settings = Settings(_env_file=None)
-    assert settings.openrouter_verifier_model == "anthropic/claude-haiku-4.5"
+    assert settings.openrouter_verifier_model == "deepseek/deepseek-v4-flash"
     assert settings.openrouter_verifier_secondary_model is None
     assert settings.verification_concurrency == 4
     assert settings.verification_sources_per_topic == 3
@@ -108,11 +110,12 @@ def test_tavily_knobs_have_defaults() -> None:
 
 
 def test_stage_a_knobs_have_defaults() -> None:
-    """P2.1 lands the Stage A technical-ranker knobs with their consumer. They
-    default to the cheap/deterministic model from Decision J; no .env needed for
-    dry-run (the heuristic fallback fires when the OpenRouter key is absent)."""
+    """P2.1 lands the Stage A technical-ranker knobs with their consumer. The
+    model defaults to deepseek/deepseek-v4-flash (Decision J standardizes every
+    agent model on it); no .env needed for dry-run (the heuristic fallback fires
+    when the OpenRouter key is absent)."""
     settings = Settings(_env_file=None)
-    assert settings.openrouter_stage_a_model == "openai/gpt-oss-120b"
+    assert settings.openrouter_stage_a_model == "deepseek/deepseek-v4-flash"
     assert settings.openrouter_stage_a_secondary_model is None
     assert settings.max_topics_per_run == 5
 
