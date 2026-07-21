@@ -142,10 +142,17 @@ class Settings(BaseSettings):
     max_articles_per_source: int = 3
     user_agent: str = "AINewsAgent/0.1"
 
-    # Orchestrator filesystem convention (StateBackend lands in P5.1; this
-    # locates the dir the fetch_curated_ai_news tool writes to). Other dirs
-    # (`outputs_dir`, `style_profile_file`, `style_samples_dir`) live with
-    # their consumer, not pre-declared.
+    # Orchestrator filesystem convention — the dir on real disk where the
+    # deterministic tools (fetch_curated_ai_news, technical_rank,
+    # verify_claim, quality_gate, load_style_profile, fetch_article) write
+    # structured artifacts via stdlib AND where deepagents' built-in
+    # write_file / read_file (used by the research/writer subagents) route
+    # through the coordinator-mounted backend. P5.1 mounts a
+    # `FilesystemBackend` rooted here — NOT a `StateBackend`, which would
+    # isolate subagent write_file payloads to LangGraph state and break the
+    # cross-tool visibility contract documented in subagents/research.py and
+    # subagents/writer.py. Other dirs (`outputs_dir`, `style_profile_file`,
+    # `style_samples_dir`) live with their consumer, not pre-declared.
     orchestrator_data_dir: str = "data/orchestrator"
 
     model_config = SettingsConfigDict(
