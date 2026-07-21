@@ -86,6 +86,15 @@ class Settings(BaseSettings):
     # Stage-A ranker; the writer's Stage-B model lands separately with P4.2.
     openrouter_stage_b_research_model: str = "anthropic/claude-sonnet-4.5"
 
+    # Stage-B writer subagent model (Decision J: voice quality is the product,
+    # and ~5 posts/run makes the cost delta trivial, so the writer gets the
+    # strongest model). Landed with its consumer — the writer subagent (P4.2).
+    openrouter_stage_b_writer_model: str = "anthropic/claude-opus-4.1"
+
+    # Skills source directory (contains linkedin-voice/SKILL.md). The writer
+    # subagent (P4.2) passes this to SkillsMiddleware. Landed with its consumer.
+    skills_dir: str = "skills"
+
     # Style-profile loader knobs. Landed with their consumer — the
     # load_style_profile tool (P3.2). `style_profile_file` is the seed profile
     # the loader reads by default; `style_samples_dir` holds the author's
