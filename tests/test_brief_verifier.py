@@ -315,6 +315,108 @@ async def test_verify_one_dry_run_with_no_evidence_uses_lower_confidence(
     assert verified.verification_confidence == 0.4  # no-evidence fallback path
 
 
+def _brief_with_urls(urls: list[str]) -> ResearchBrief:
+    brief = _brief()
+    brief.citations = [Citation(title=f"S{i}", url=u, domain="x.example") for i, u in enumerate(urls)]
+    return brief
+
+
+async def test_verifier_skips_search_when_citations_suffice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dependency reduction: when the brief's own cited sources (the topic's
+    clustered supporting_urls) already yield enough extractable evidence, the
+    verifier does NOT fall back to web search — a running SearXNG instance is
+    unnecessary whenever RSS clustering already surfaced enough coverage."""
+    settings = _settings(api_key=None)  # verification_sources_per_topic == 3
+    urls = ["https://a.example/1", "https://b.example/2", "https://c.example/3"]
+    brief = _brief_with_urls(urls)
+    _stub_web_extract(monkeypatch, {u: f"Independent coverage of {u}." for u in urls})
+
+    async def _must_not_search(*args: object, **kwargs: object) -> list[object]:
+        raise AssertionError("web search must not fire when citations suffice")
+
+    monkeypatch.setattr(
+        "app.orchestrator.services.searxng_client.SearxngClient.search_news",
+        _must_not_search,
+    )
+
+    verified = await BriefVerifier(settings).verify_one(brief, hours_back=24, dry_run=True)
+    assert verified.verification_status == "partially_verified"
+    assert verified.verification_confidence == 0.6  # evidence present, no search needed
+
+
+async def test_verifier_falls_back_to_search_when_citations_unextractable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """'Thin' is measured by *usable* evidence, not mere citation count: three
+    citations that yield no extractable text still trigger the search fallback."""
+    settings = _settings(api_key=None)
+    urls = ["https://a.example/1", "https://b.example/2", "https://c.example/3"]
+    brief = _brief_with_urls(urls)
+    _stub_web_extract(monkeypatch, {})  # none of the citations extract -> usable_base = 0
+
+    searched = {"n": 0}
+
+    async def _spy_search(self, client, query, hours_back, max_results, dry_run):  # type: ignore[no-untyped-def]
+        searched["n"] += 1
+        return []
+
+    monkeypatch.setattr(
+        "app.orchestrator.services.searxng_client.SearxngClient.search_news",
+        _spy_search,
+    )
+
+    await BriefVerifier(settings).verify_one(brief, hours_back=24, dry_run=True)
+    assert searched["n"] > 0  # 3 citations but 0 extractable -> fell back to search
+
+
+async def test_verifier_real_call_uses_base_evidence_and_skips_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real fact-checking path (dry_run=False): when the brief's cited sources
+    suffice, the model prompt carries the base-source evidence and web search is
+    never called — the skip decision affects the actual verification, not just
+    the heuristic fallback."""
+    import json as _json
+
+    settings = _settings(api_key="sk-test")
+    urls = ["https://a.example/1", "https://b.example/2", "https://c.example/3"]
+    brief = _brief_with_urls(urls)
+    _stub_web_extract(monkeypatch, {u: f"Independent coverage of {u}." for u in urls})
+
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.content.decode("utf-8")
+        payload = {"verdict": "verified", "confidence": 0.9, "notes": []}
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": _json.dumps(payload)}}]}
+        )
+
+    real = httpx.AsyncClient
+
+    def _factory(*args: object, **kwargs: object) -> httpx.AsyncClient:
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(svc_mod.httpx, "AsyncClient", _factory)
+
+    async def _must_not_search(*args: object, **kwargs: object) -> list[object]:
+        raise AssertionError("search must not fire when citations suffice")
+
+    monkeypatch.setattr(
+        "app.orchestrator.services.searxng_client.SearxngClient.search_news",
+        _must_not_search,
+    )
+
+    verified = await BriefVerifier(settings).verify_one(brief, hours_back=24, dry_run=False)
+
+    assert verified.verification_status == "verified"
+    # Base-source (supporting_urls) evidence reached the fact-checking prompt.
+    assert "Independent coverage of https://a.example/1" in captured["body"]
+
+
 async def test_verify_one_real_call_parses_verifier_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     """With OPENROUTER_API_KEY present and dry_run=False, the verifier calls
     OpenRouter chat completions and parses the JSON verdict."""

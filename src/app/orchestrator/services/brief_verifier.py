@@ -2,9 +2,12 @@
 (``reference/linkedin-agent/src/app/services/brief_verifier.py``).
 
 Verifies a :class:`ResearchBrief` (headline, summary, technical/business
-claims) against independently gathered evidence: per-brief search queries +
-local article-text extraction, reconciled with an OpenRouter fact-checking
-model. The result is a
+claims) against independently gathered evidence. Primary evidence is local
+article-text extraction of the brief's own cited sources — which carry the
+topic's clustered ``supporting_urls`` (independent coverage the RSS pipeline
+already found); SearXNG search is a *fallback*, fired only when those sources
+are too thin to corroborate. The evidence is reconciled with an OpenRouter
+fact-checking model. The result is a
 copy of the input brief with ``verification_status`` /
 ``verification_confidence`` / ``verification_notes`` set, plus conservatively
 rewritten ``summary`` / ``technical_significance`` / ``business_impact`` /
@@ -131,52 +134,72 @@ class BriefVerifier:
         hours_back: int,
         dry_run: bool,
     ) -> ResearchBrief:
+        sources_per_topic = max(1, self.settings.verification_sources_per_topic)
+
         base_urls: list[str] = []
         for citation in brief.citations:
             if citation.url not in base_urls:
                 base_urls.append(citation.url)
-            if len(base_urls) >= max(1, self.settings.verification_sources_per_topic):
+            if len(base_urls) >= sources_per_topic:
                 break
 
-        queries = _build_verifier_queries(brief)
-        search_tasks = [
-            self.search_client.search_news(
-                client=client,
-                query=query,
-                hours_back=hours_back,
-                max_results=max(2, self.settings.verification_sources_per_topic),
-                dry_run=dry_run,
-            )
-            for query in queries
-        ]
-        base_extract_task = extract_url_texts(base_urls, self.settings, dry_run=dry_run)
-        gathered_searches = (
-            await asyncio.gather(*search_tasks, return_exceptions=True) if search_tasks else []
-        )
-        base_extracted = await base_extract_task
+        # Primary corroboration: the brief's own cited sources. These carry the
+        # topic's clustered supporting_urls — independent coverage the RSS
+        # pipeline already found and the researcher cited — so extract them
+        # first, no search required.
+        base_extracted = await extract_url_texts(base_urls, self.settings, dry_run=dry_run)
+        usable_base = sum(1 for url in base_urls if base_extracted.get(url))
 
-        corroborating: list[Any] = []
-        for maybe_items in gathered_searches:
-            if isinstance(maybe_items, Exception):
-                logger.warning(
-                    "Verifier evidence search failed for %s: %s",
-                    brief.topic_id,
-                    maybe_items,
+        extracted: dict[str, str] = dict(base_extracted)
+        evidence_urls: list[str] = list(base_urls)
+        deduped_corroborating: list[Any] = []
+
+        # Web search is a *fallback*: reach for it only when the cluster's own
+        # sources are too thin to corroborate. Whenever RSS clustering already
+        # surfaced enough independent coverage, a running SearXNG instance is
+        # never needed. (Extracting base sources first — before deciding to
+        # search — is a deliberate serialization: the skip decision depends on
+        # how much base evidence we actually got.)
+        if usable_base < sources_per_topic:
+            queries = _build_verifier_queries(brief)
+            gathered_searches = (
+                await asyncio.gather(
+                    *(
+                        self.search_client.search_news(
+                            client=client,
+                            query=query,
+                            hours_back=hours_back,
+                            max_results=max(2, sources_per_topic),
+                            dry_run=dry_run,
+                        )
+                        for query in queries
+                    ),
+                    return_exceptions=True,
                 )
-                continue
-            corroborating.extend(cast(list[Any], maybe_items))
+                if queries
+                else []
+            )
 
-        deduped_corroborating = _dedupe_discovered(corroborating)
+            corroborating: list[Any] = []
+            for maybe_items in gathered_searches:
+                if isinstance(maybe_items, Exception):
+                    logger.warning(
+                        "Verifier evidence search failed for %s: %s",
+                        brief.topic_id,
+                        maybe_items,
+                    )
+                    continue
+                corroborating.extend(cast(list[Any], maybe_items))
 
-        evidence_urls = list(base_urls)
-        evidence_urls.extend(
-            item.url for item in deduped_corroborating if item.url not in evidence_urls
-        )
-        evidence_urls = evidence_urls[: max(3, self.settings.verification_sources_per_topic + 1)]
+            deduped_corroborating = _dedupe_discovered(corroborating)
+            evidence_urls.extend(
+                item.url for item in deduped_corroborating if item.url not in evidence_urls
+            )
+            evidence_urls = evidence_urls[: max(3, sources_per_topic + 1)]
 
-        delta_urls = [url for url in evidence_urls if url not in base_urls]
-        delta_extracted = await extract_url_texts(delta_urls, self.settings, dry_run=dry_run)
-        extracted = {**base_extracted, **delta_extracted}
+            delta_urls = [url for url in evidence_urls if url not in base_urls]
+            delta_extracted = await extract_url_texts(delta_urls, self.settings, dry_run=dry_run)
+            extracted.update(delta_extracted)
 
         evidence_texts: list[str] = []
         snippet_by_url = {
