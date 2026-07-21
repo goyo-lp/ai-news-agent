@@ -73,9 +73,12 @@ Work adaptively — you decide the sequence:
    makes a claim you cannot stand behind, call `fetch_article` on the primary_url
    to get the real article (SSRF-guarded, size-capped). Read the fetched
    content from the `path` it returns; the tool never returns the body inline.
-2. When you need independent corroboration or the primary source is weak, use
-   `web_search` for the claim and `web_extract` on the most relevant
-   result URLs. Read their artifacts from the returned `path`.
+2. For independent corroboration, use the topic's `supporting_urls` FIRST — they
+   are other sources already found covering this same story (RSS clustering), so
+   they need no search. Run `web_extract` on them. Only when they are missing or
+   too thin should you fall back to `web_search` for the claim and then
+   `web_extract` the most relevant results. Read artifacts from the returned
+   `path`.
 3. Synthesize the brief. Extract what is *technically* new — a capability, a
    result, a shift — not marketing. Ground every claim in something you fetched
    or searched; never invent numbers, quotes, capabilities, or URLs. Cite only
