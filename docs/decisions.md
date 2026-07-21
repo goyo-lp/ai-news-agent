@@ -59,12 +59,17 @@ is dropped — the coordinator isn't a fixed LangGraph, so it no longer maps cle
 git dependency.
 
 ## J — Models (via OpenRouter, env-tunable)
-- **Stage A rank:** `openai/gpt-oss-120b` (or `claude-haiku-4-5`) — cheap, deterministic.
-- **Research subagent:** `claude-sonnet-5` — agentic tool use.
-- **Writer subagent:** `claude-opus-4-8` — voice quality is the product, and ~5 posts/run
-  makes the cost delta trivial.
+Every agent model uses **`deepseek/deepseek-v4-flash`** — the same model the news pipeline
+already summarizes with. One model across all four tiers:
+- **Stage A rank** (`openrouter_stage_a_model`)
+- **Verifier** (`openrouter_verifier_model`)
+- **Research subagent** (`openrouter_stage_b_research_model`)
+- **Writer subagent** (`openrouter_stage_b_writer_model`)
 
-Lean alternative: `claude-sonnet-5` for both research and writing.
+The per-tier knobs stay separate (not collapsed into one) so any tier can be pointed at a
+different model via env without touching the others — the writer is the natural first upgrade
+if post voice quality warrants it. The Stage A / Stage B split (principle #4) is preserved
+structurally; only the defaults are unified.
 
 ## Guiding principles
 
@@ -76,8 +81,9 @@ Lean alternative: `claude-sonnet-5` for both research and writing.
 3. **Structured data lives in the filesystem/StateBackend; subagents return only compressed
    findings.** A subagent's single text report is lossy — never route the full ranked-article
    list through it.
-4. **Preserve the Stage A / Stage B model split** via per-subagent model overrides (cheap
-   ranker, strong researcher/writer).
+4. **Preserve the Stage A / Stage B model split** via per-subagent model overrides — each tier
+   keeps its own knob so it can diverge later, even though Decision J now defaults them all to
+   one model.
 5. **Reuse, don't rewrite.** The news pipeline, SSRF-guarded fetch, Tavily client, Telegram
    client, and style profile are assets — wrap them.
 6. **Every change ships as a ≤500-LOC PR with tests.** Dry-run parity against the old pipeline
