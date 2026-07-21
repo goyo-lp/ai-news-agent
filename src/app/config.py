@@ -94,6 +94,14 @@ class Settings(BaseSettings):
     # deepseek/deepseek-v4-flash.
     openrouter_stage_b_writer_model: str = "deepseek/deepseek-v4-flash"
 
+    # Coordinator (main agent) model. Landed with its consumer — the
+    # build_coordinator_agent factory (P5.2). The coordinator's job is plan +
+    # delegate, not author prose, so a cheap planner is the right default; the
+    # Decision J default is deepseek/deepseek-v4-flash. Kept as its own knob so
+    # the planner tier can be upgraded independently of Stage A ranker (P2.1)
+    # and Stage B researcher/writer (P4.*).
+    openrouter_coordinator_model: str = "deepseek/deepseek-v4-flash"
+
     # Skills source directory (contains linkedin-voice/SKILL.md). The writer
     # subagent (P4.2) passes this to SkillsMiddleware. Landed with its consumer.
     skills_dir: str = "skills"

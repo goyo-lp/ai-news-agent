@@ -81,6 +81,8 @@ def test_stage_b_writer_knobs_have_defaults() -> None:
     settings = Settings(_env_file=None)
     assert settings.openrouter_stage_b_writer_model == "deepseek/deepseek-v4-flash"
     assert settings.skills_dir == "skills"
+    # Coordinator model landed with its consumer (P5.2 build_coordinator_agent).
+    assert settings.openrouter_coordinator_model == "deepseek/deepseek-v4-flash"
 
 
 def test_verifier_knobs_have_defaults() -> None:
