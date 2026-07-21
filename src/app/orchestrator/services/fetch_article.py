@@ -118,8 +118,10 @@ def slug_for_url(url: str) -> str:
 
 def _clean_text(html: str) -> str:
     """Strip noise tags from HTML and return a single-line plain text slice.
-    BeautifulSoup's ``get_text`` is the cheap path; this is *not* a
-    readability extraction (the research subagent uses Tavily/LLM for that)."""
+    BeautifulSoup's ``get_text`` is the cheap path; this is *not* a readability
+    extraction. When the research subagent needs true readability it uses the
+    ``web_extract`` tool (trafilatura); this slice is the fetch tool's own
+    lightweight body payload."""
     soup = BeautifulSoup(html, "lxml")
     for tag in soup(_NOISE_TAGS):
         tag.decompose()

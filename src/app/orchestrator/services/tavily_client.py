@@ -1,9 +1,11 @@
 """Tavily client ported from the reference LinkedIn agent
 (``reference/linkedin-agent/src/app/services/tavily_client.py``).
 
-Tavily has two surfaces the orchestrator's research subagent uses (P4.1):
-  * ``search_news`` — news-mode search returning ``DiscoveredItem`` results.
-  * ``extract_contents`` — extract endpoint: ``{url: text}`` for given URLs.
+This client now covers only Tavily *search* (``search_news`` — news-mode search
+returning ``DiscoveredItem`` results). Article-text extraction has moved off
+Tavily's paid ``/extract`` endpoint to the keyless local
+:mod:`app.orchestrator.services.web_extract` (SSRF-guarded fetch + trafilatura);
+search itself moves to self-hosted SearXNG in the next PR.
 
 Intentional divergences from the reference (both documented here so the port's
 gaps don't drift silently):
@@ -44,14 +46,6 @@ logger = logging.getLogger(__name__)
 
 class TavilySearchError(Exception):
     """Raised when the Tavily search call fails in non-dry-run mode."""
-
-
-class TavilyExtractError(Exception):
-    """Raised when the Tavily extract endpoint call fails (HTTP error /
-    transport error / JSON decode error) in non-dry-run mode. Distinguished
-    at the tool layer from `success_count=0` (which means the endpoint answered
-    with no extractable content for any URL) so a research subagent can tell
-    'endpoint down' from 'endpoint answered, nothing usable'."""
 
 
 class TavilyClient:
@@ -147,76 +141,6 @@ class TavilyClient:
                 if parsed is not None:
                     items.append(parsed)
         return items
-
-    async def extract_contents(
-        self,
-        client: httpx.AsyncClient,
-        urls: list[str],
-        dry_run: bool,
-    ) -> dict[str, str]:
-        """Extract per-URL cleaned text via the Tavily extract endpoint. De-dups
-        URLs by normalized form first. Returns ``{normalized_url: text}``.
-
-        Empty dict (no exception) on: empty input (short-circuit, no network)
-        and missing TAVILY_API_KEY in non-dry-run (no-op rather than raised —
-        the research subagent can keep working with other evidence). Tavily dry
-        run returns mock content per URL. Endpoint failure raises
-        :class:`TavilyExtractError` so the tool can surface it as `status=
-        "error"`, distinct from 'endpoint answered but no content'."""
-        unique_urls: list[str] = []
-        seen: set[str] = set()
-        for url in urls:
-            normalized = normalize_url(url)
-            if normalized not in seen:
-                seen.add(normalized)
-                unique_urls.append(normalized)
-
-        if not unique_urls:
-            return {}
-
-        if dry_run:
-            return {url: "Dry-run mock content." for url in unique_urls}
-
-        if not (self.settings.tavily_api_key or "").strip():
-            return {}
-
-        payload: dict[str, Any] = {
-            "api_key": self.settings.tavily_api_key,
-            "urls": unique_urls,
-            "include_images": False,
-        }
-
-        try:
-            # TODO(P7.2): wire api_usage_tracker.record_tavily_extract here.
-            response = await client.post(
-                f"{self.settings.tavily_base_url}/extract", json=payload
-            )
-            response.raise_for_status()
-            data = response.json()
-        except Exception as exc:
-            # Re-raise so the tool layer can distinguish 'endpoint down' from
-            # 'endpoint answered, no extractable content'. The reference
-            # returned {} silently — that was fine for an internal call graph,
-            # but a tool-fed subagent needs the distinction (verifier retry path
-            # checks the summary's `status` field).
-            logger.warning("Tavily extract failed: %s", exc)
-            raise TavilyExtractError(str(exc)) from exc
-
-        extracted_payload = data.get("results") or data.get("data") or []
-        extracted: dict[str, str] = {}
-        if isinstance(extracted_payload, list):
-            for item in extracted_payload:
-                if not isinstance(item, dict):
-                    continue
-                url = normalize_url(str(item.get("url") or "").strip())
-                if not url:
-                    continue
-                content = str(
-                    item.get("raw_content") or item.get("content") or item.get("text") or ""
-                ).strip()
-                if content:
-                    extracted[url] = content
-        return extracted
 
     def _result_to_item(self, raw: Any, query: str) -> DiscoveredItem | None:
         if not isinstance(raw, dict):
@@ -320,4 +244,4 @@ def _parse_datetime(value: Any) -> datetime | None:
     return parsed
 
 
-__all__ = ["TavilyClient", "TavilySearchError", "TavilyExtractError"]
+__all__ = ["TavilyClient", "TavilySearchError"]

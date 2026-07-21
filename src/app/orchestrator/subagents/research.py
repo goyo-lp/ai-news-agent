@@ -39,8 +39,8 @@ from app.orchestrator.models import build_openrouter_chat_model
 from app.orchestrator.schemas import ResearchBrief
 from app.orchestrator.tools.fetch import build_fetch_article_tool
 from app.orchestrator.tools.tavily import (
-    build_tavily_extract_tool,
     build_tavily_search_tool,
+    build_web_extract_tool,
 )
 from app.orchestrator.tools.verify_claim import build_verify_claim_tool
 
@@ -74,7 +74,7 @@ Work adaptively — you decide the sequence:
    to get the real article (SSRF-guarded, size-capped). Read the fetched
    content from the `path` it returns; the tool never returns the body inline.
 2. When you need independent corroboration or the primary source is weak, use
-   `tavily_search` for the claim and `tavily_extract` on the most relevant
+   `tavily_search` for the claim and `web_extract` on the most relevant
    result URLs. Read their artifacts from the returned `path`.
 3. Synthesize the brief. Extract what is *technically* new — a capability, a
    result, a shift — not marketing. Ground every claim in something you fetched
@@ -118,7 +118,7 @@ def build_research_subagent(settings: Settings | None = None) -> SubAgent:
         tools=[
             build_fetch_article_tool(s),
             build_tavily_search_tool(s),
-            build_tavily_extract_tool(s),
+            build_web_extract_tool(s),
             build_verify_claim_tool(s),
         ],
         model=build_openrouter_chat_model(

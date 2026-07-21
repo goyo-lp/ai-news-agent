@@ -9,11 +9,12 @@ import pytest
 from app.config import Settings
 from app.orchestrator.services import tavily_client as svc_mod
 from app.orchestrator.services.ranking import DiscoveredItem
+from app.orchestrator.tools import tavily as tools_mod
 from app.orchestrator.tools.tavily import (
-    build_tavily_extract_tool,
     build_tavily_search_tool,
-    tavily_extract_tool,
+    build_web_extract_tool,
     tavily_search_tool,
+    web_extract_tool,
     write_extract_to_state,
     write_search_to_state,
 )
@@ -62,7 +63,7 @@ def test_write_extract_to_state_round_trips_url_text_map(tmp_path: Path) -> None
     urls = list(extracted.keys())
     path = write_extract_to_state(extracted, urls, str(tmp_path))
 
-    assert path.parent == tmp_path / "tavily" / "extracted"
+    assert path.parent == tmp_path / "web" / "extracted"
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["urls"] == urls
     assert payload["results"] == extracted
@@ -167,13 +168,30 @@ async def test_search_tool_respects_explicit_zero_args(
 
 
 # --- extract tool -----------------------------------------------------------
+#
+# The extract tool now wraps the local extract_url_texts service (SSRF-guarded
+# fetch + trafilatura); the service itself is covered end-to-end in
+# test_web_extract.py. Here we stub it to test the *tool's* orchestration:
+# input validation, dedupe, honest success_count, persistence, and summary
+# shape.
 
 
-async def test_extract_tool_dry_run_writes_mock_text_map(
+def _stub_extract(monkeypatch: pytest.MonkeyPatch, mapping: dict[str, str]) -> None:
+    async def _fake(urls: list[str], settings: Settings, *, dry_run: bool = False) -> dict[str, str]:
+        return {u: mapping[u] for u in urls if u in mapping}
+
+    monkeypatch.setattr(tools_mod, "extract_url_texts", _fake)
+
+
+async def test_extract_tool_writes_extracted_text_and_compressed_summary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    settings = _settings(tmp_path, api_key=None)
-    tool = build_tavily_extract_tool(settings)
+    _stub_extract(
+        monkeypatch,
+        {"https://a.example/x": "Real text A.", "https://b.example/y": "Real text B."},
+    )
+    settings = _settings(tmp_path)
+    tool = build_web_extract_tool(settings)
 
     result = json.loads(
         await tool.ainvoke({"urls": ["https://a.example/x", "https://b.example/y", "https://a.example/x"]})
@@ -185,29 +203,32 @@ async def test_extract_tool_dry_run_writes_mock_text_map(
     # Three input URLs, two distinct after normalization.
     assert result["url_count"] == 2
     assert result["success_count"] == 2
+    # The summary does NOT carry the extracted text — that's on disk only.
+    assert "results" not in result
     artifact = json.loads(Path(result["path"]).read_text(encoding="utf-8"))
-    assert set(artifact["results"]) == {"https://a.example/x", "https://b.example/y"}
+    assert artifact["results"]["https://a.example/x"] == "Real text A."
+    assert Path(result["path"]).parent == Path(settings.orchestrator_data_dir) / "web" / "extracted"
 
 
 async def test_extract_tool_empty_urls_returns_error_without_writing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    settings = _settings(tmp_path, api_key=None)
-    tool = build_tavily_extract_tool(settings)
+    settings = _settings(tmp_path)
+    tool = build_web_extract_tool(settings)
 
     result = json.loads(await tool.ainvoke({"urls": []}))
 
     assert result["status"] == "error"
     assert result["path"] is None
     assert "required" in result["reason"]
-    assert not (Path(settings.orchestrator_data_dir) / "tavily").exists()
+    assert not (Path(settings.orchestrator_data_dir) / "web").exists()
 
 
 async def test_extract_tool_rejects_only_whitespace_urls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    settings = _settings(tmp_path, api_key=None)
-    tool = build_tavily_extract_tool(settings)
+    settings = _settings(tmp_path)
+    tool = build_web_extract_tool(settings)
 
     result = json.loads(await tool.ainvoke({"urls": ["   ", "   "]}))
 
@@ -215,51 +236,15 @@ async def test_extract_tool_rejects_only_whitespace_urls(
     assert "no valid URLs" in result["reason"]
 
 
-async def test_extract_tool_real_call_writes_extracted_text(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    response = {
-        "results": [
-            {"url": "https://a.example/x", "raw_content": "Real text A."},
-            {"url": "https://b.example/y", "content": "Real text B."},
-        ]
-    }
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=response)
-
-    _patch_httpx(monkeypatch, handler)
-    settings = _settings(tmp_path, api_key="sk-test")
-    tool = build_tavily_extract_tool(settings)
-
-    result = json.loads(
-        await tool.ainvoke({"urls": ["https://a.example/x", "https://b.example/y"]})
-    )
-
-    assert result["status"] == "ok"
-    assert result["success_count"] == 2
-    artifact = json.loads(Path(result["path"]).read_text(encoding="utf-8"))
-    assert artifact["results"]["https://a.example/x"] == "Real text A."
-
-
 async def test_extract_tool_partial_success_reports_success_count_honestly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Endpoint answered, but only one URL produced extractable content —
-    that's `status=ok`, `success_count=1` (NOT an error)."""
-    response = {
-        "results": [
-            {"url": "https://a.example/x", "raw_content": "Real text A."},
-            # b.example/y is absent from results: not extractable, or filtered.
-        ]
-    }
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=response)
-
-    _patch_httpx(monkeypatch, handler)
-    settings = _settings(tmp_path, api_key="sk-test")
-    tool = build_tavily_extract_tool(settings)
+    """Only one URL yielded extractable text (the other was unreachable/blocked
+    and skipped inside the service) — that's `status=ok`, `success_count=1`, NOT
+    an error. A skipped URL is not a failure."""
+    _stub_extract(monkeypatch, {"https://a.example/x": "Real text A."})
+    settings = _settings(tmp_path)
+    tool = build_web_extract_tool(settings)
 
     result = json.loads(
         await tool.ainvoke({"urls": ["https://a.example/x", "https://b.example/y"]})
@@ -270,18 +255,19 @@ async def test_extract_tool_partial_success_reports_success_count_honestly(
     assert result["url_count"] == 2
 
 
-async def test_extract_tool_endpoint_failure_reports_error_status(
+async def test_extract_tool_service_exception_reports_error_status(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P2.3 review MAJOR #2: an HTTP 500 from the extract endpoint surfaces as
-    `status=error`, distinct from a successful-but-empty extract."""
+    """An unexpected service-level exception surfaces as `status=error` (no
+    artifact) rather than propagating into the agent loop. Individual URL
+    failures are skipped inside the service; only a whole-call fault errors."""
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(500, json={"error": "boom"})
+    async def _boom(urls: list[str], settings: Settings, *, dry_run: bool = False) -> dict[str, str]:
+        raise RuntimeError("extractor blew up")
 
-    _patch_httpx(monkeypatch, handler)
-    settings = _settings(tmp_path, api_key="sk-test")
-    tool = build_tavily_extract_tool(settings)
+    monkeypatch.setattr(tools_mod, "extract_url_texts", _boom)
+    settings = _settings(tmp_path)
+    tool = build_web_extract_tool(settings)
 
     result = json.loads(await tool.ainvoke({"urls": ["https://a.example/x"]}))
 
@@ -293,6 +279,6 @@ async def test_extract_tool_endpoint_failure_reports_error_status(
 
 def test_default_singletons_are_structured_tools() -> None:
     assert tavily_search_tool.name == "tavily_search"
-    assert tavily_extract_tool.name == "tavily_extract"
+    assert web_extract_tool.name == "web_extract"
     assert tavily_search_tool.args_schema is not None
-    assert tavily_extract_tool.args_schema is not None
+    assert web_extract_tool.args_schema is not None
