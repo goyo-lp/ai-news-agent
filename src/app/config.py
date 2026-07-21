@@ -79,6 +79,13 @@ class Settings(BaseSettings):
     verification_concurrency: int = 4
     verification_sources_per_topic: int = 3
 
+    # Style-profile loader knobs. Landed with their consumer — the
+    # load_style_profile tool (P3.2). `style_profile_file` is the seed profile
+    # the loader reads by default; `style_samples_dir` holds the author's
+    # writing samples the loader rebuilds from on demand.
+    style_profile_file: str = "data/style_profile.json"
+    style_samples_dir: str = "data/style_samples"
+
     # Per-subagent model / deep-agent / orchestration knobs live with their
     # consumer (P3.1 linkedin-voice, P4.* subagents, P5.* coordinator). They are
     # intentionally NOT pre-declared here: a knob with no consumer is config
