@@ -7,41 +7,38 @@ import httpx
 import pytest
 
 from app.config import Settings
-from app.orchestrator.services import tavily_client as svc_mod
 from app.orchestrator.services.ranking import DiscoveredItem
-from app.orchestrator.tools import tavily as tools_mod
-from app.orchestrator.tools.tavily import (
-    build_tavily_search_tool,
+from app.orchestrator.tools import web as tools_mod
+from app.orchestrator.tools.web import (
     build_web_extract_tool,
-    tavily_search_tool,
+    build_web_search_tool,
     web_extract_tool,
+    web_search_tool,
     write_extract_to_state,
     write_search_to_state,
 )
 
 
-def _settings(tmp_path: Path, *, api_key: str | None = None) -> Settings:
+def _settings(tmp_path: Path, *, base_url: str = "") -> Settings:
     return Settings(
         _env_file=None,
         orchestrator_data_dir=str(tmp_path),
-        tavily_api_key=api_key,
-        tavily_base_url="https://api.tavily.example",
+        searxng_base_url=base_url,
         request_timeout_seconds=10,
     )
 
 
 def _patch_httpx(monkeypatch: pytest.MonkeyPatch, handler) -> None:
-    """The tools construct their own httpx.AsyncClient internally (just like
-    search_many), so patch the AsyncClient symbol on the tavily_client module
-    that they route through. Capture the real AsyncClient first to avoid the
-    recursion bug seen earlier in P2.2."""
+    """The search tool constructs its own httpx.AsyncClient inside _run_search,
+    so patch the AsyncClient symbol on the web tools module. Capture the real
+    AsyncClient first to avoid a recursion bug."""
     real = httpx.AsyncClient
 
     def _factory(*args: object, **kwargs: object) -> httpx.AsyncClient:
         kwargs["transport"] = httpx.MockTransport(handler)
         return real(**kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(svc_mod.httpx, "AsyncClient", _factory)
+    monkeypatch.setattr(tools_mod.httpx, "AsyncClient", _factory)
 
 
 def test_write_search_to_state_round_trips_discovered_items(tmp_path: Path) -> None:
@@ -51,7 +48,7 @@ def test_write_search_to_state_round_trips_discovered_items(tmp_path: Path) -> N
     ]
     path = write_search_to_state(items, "q", str(tmp_path))
 
-    assert path.parent == tmp_path / "tavily" / "search"
+    assert path.parent == tmp_path / "web" / "search"
     assert path.name.endswith(".json")
     on_disk = json.loads(path.read_text(encoding="utf-8"))
     assert len(on_disk) == 2
@@ -72,9 +69,9 @@ def test_write_extract_to_state_round_trips_url_text_map(tmp_path: Path) -> None
 async def test_search_tool_dry_run_writes_mock_results_and_compressed_summary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # No httpx patch: dry-run path doesn't touch the network.
-    settings = _settings(tmp_path, api_key=None)
-    tool = build_tavily_search_tool(settings)
+    # No SEARXNG_BASE_URL -> dry-run mock; no network.
+    settings = _settings(tmp_path, base_url="")
+    tool = build_web_search_tool(settings)
 
     result = json.loads(await tool.ainvoke({"query": "ai agents", "max_results": 2}))
 
@@ -83,7 +80,7 @@ async def test_search_tool_dry_run_writes_mock_results_and_compressed_summary(
     assert result["reason"] is None
     assert result["query"] == "ai agents"
     assert result["result_count"] == 2
-    assert Path(result["path"]).parent == Path(settings.orchestrator_data_dir) / "tavily" / "search"
+    assert Path(result["path"]).parent == Path(settings.orchestrator_data_dir) / "web" / "search"
     # The summary does NOT carry the result list — that's on disk only.
     assert "results" not in result
     on_disk = json.loads(Path(result["path"]).read_text(encoding="utf-8"))
@@ -93,15 +90,15 @@ async def test_search_tool_dry_run_writes_mock_results_and_compressed_summary(
 async def test_search_tool_empty_query_returns_error_without_writing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    settings = _settings(tmp_path, api_key=None)
-    tool = build_tavily_search_tool(settings)
+    settings = _settings(tmp_path, base_url="")
+    tool = build_web_search_tool(settings)
 
     result = json.loads(await tool.ainvoke({"query": "   "}))
     assert result["status"] == "error"
     assert result["query"] == ""
     assert "required" in result["reason"]
     # Nothing written.
-    assert not (Path(settings.orchestrator_data_dir) / "tavily").exists()
+    assert not (Path(settings.orchestrator_data_dir) / "web").exists()
 
 
 async def test_search_tool_real_call_parses_and_writes(
@@ -113,8 +110,7 @@ async def test_search_tool_real_call_parses_and_writes(
                 "title": "OpenAI launches new model",
                 "url": "https://openai.com/news/x",
                 "content": "snippet",
-                "raw_content": "body text",
-                "published_date": "2025-01-15T12:30:45Z",
+                "publishedDate": "2025-01-15T12:30:45Z",
             }
         ]
     }
@@ -123,8 +119,8 @@ async def test_search_tool_real_call_parses_and_writes(
         return httpx.Response(200, json=response)
 
     _patch_httpx(monkeypatch, handler)
-    settings = _settings(tmp_path, api_key="sk-test")
-    tool = build_tavily_search_tool(settings)
+    settings = _settings(tmp_path, base_url="https://searxng.example")
+    tool = build_web_search_tool(settings)
 
     result = json.loads(await tool.ainvoke({"query": "openai", "hours_back": 24, "max_results": 1}))
 
@@ -141,8 +137,8 @@ async def test_search_tool_translates_http_failure_to_error_summary(
         return httpx.Response(500, json={"error": "boom"})
 
     _patch_httpx(monkeypatch, handler)
-    settings = _settings(tmp_path, api_key="sk-test")
-    tool = build_tavily_search_tool(settings)
+    settings = _settings(tmp_path, base_url="https://searxng.example")
+    tool = build_web_search_tool(settings)
 
     result = json.loads(await tool.ainvoke({"query": "openai", "max_results": 1}))
 
@@ -155,12 +151,10 @@ async def test_search_tool_translates_http_failure_to_error_summary(
 async def test_search_tool_respects_explicit_zero_args(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P2.3 review BLOCKER #1: an explicit `hours_back=0` or `max_results=0` is
-    a real value, not 'unset'. The truthy-`or`-fallback pattern silently
-    coerced both to defaults (24/8); the None-vs-0 check respects the explicit
-    zero. ``max_results=0`` => zero mock templates returned (deterministic)."""
-    settings = _settings(tmp_path, api_key=None)
-    tool = build_tavily_search_tool(settings)
+    """An explicit `max_results=0` is a real value, not 'unset'. The None-vs-0
+    check respects the explicit zero: zero mock templates returned."""
+    settings = _settings(tmp_path, base_url="")
+    tool = build_web_search_tool(settings)
 
     result = json.loads(await tool.ainvoke({"query": "q", "max_results": 0}))
     assert result["status"] == "ok"
@@ -278,7 +272,7 @@ async def test_extract_tool_service_exception_reports_error_status(
 
 
 def test_default_singletons_are_structured_tools() -> None:
-    assert tavily_search_tool.name == "tavily_search"
+    assert web_search_tool.name == "web_search"
     assert web_extract_tool.name == "web_extract"
-    assert tavily_search_tool.args_schema is not None
+    assert web_search_tool.args_schema is not None
     assert web_extract_tool.args_schema is not None

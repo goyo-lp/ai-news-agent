@@ -78,6 +78,19 @@ Each Telegram message is:
 - **Secret redaction**: the Telegram bot token (embedded in the request URL per Telegram's API design) is redacted from any exception message before it's logged.
 - Dependencies have been checked with `pip-audit` against the PyPI/OSV advisory database (no known vulnerabilities as of the last manual check) — this isn't yet wired into CI, so re-run it periodically: `uvx pip-audit --requirement <(uv export --no-hashes)`.
 
+## Research Evidence (no paid dependencies)
+
+The orchestrator's research tools use only keyless/self-hosted evidence sources — no Tavily, no API keys, LLM cost aside:
+
+- **`web_extract`** — fetches article text locally through the SSRF-guarded, size-capped HTTP path and extracts it with [trafilatura](https://trafilatura.readthedocs.io/). Always available; no service required.
+- **`web_search`** — queries a self-hosted [SearXNG](https://docs.searxng.org/) instance (keyless). Start one with:
+  ```bash
+  docker compose -f docker-compose.searxng.yml up -d
+  ```
+  then set `SEARXNG_BASE_URL=http://localhost:8080` in `.env`. The JSON API the tool uses is enabled in `searxng/settings.yml` (SearXNG ships with JSON off by default). Leave `SEARXNG_BASE_URL` empty to run without an instance — `web_search` then returns deterministic dry-run mock results.
+
+Independent corroboration leans first on the RSS pipeline's clustered `supporting_urls` (sources it already found), with SearXNG as the fallback when the cluster is thin.
+
 ## Project Structure
 
 ```text

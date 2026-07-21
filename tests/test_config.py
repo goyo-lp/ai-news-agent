@@ -96,17 +96,15 @@ def test_verifier_knobs_have_defaults() -> None:
     assert settings.verification_sources_per_topic == 3
 
 
-def test_tavily_knobs_have_defaults() -> None:
-    """P2.3 lands the Tavily research-evidence knobs with their consumer. They
-    default such that dry-run works without an API key (the TavilyClient falls
-    back to mock_search / empty results when tavily_api_key is unset)."""
+def test_searxng_knobs_have_defaults() -> None:
+    """Research search runs against a self-hosted SearXNG instance (keyless).
+    An empty base URL means 'not configured' -> the client returns dry-run mock
+    results, so nothing requires a running instance to iterate."""
     settings = Settings(_env_file=None)
-    assert settings.tavily_api_key is None
-    assert settings.tavily_base_url == "https://api.tavily.com"
-    assert settings.tavily_topic == "news"
-    assert settings.tavily_search_depth == "advanced"
-    assert settings.tavily_time_range == "day"
-    assert settings.tavily_http_concurrency == 6
+    assert settings.searxng_base_url == ""
+    assert settings.searxng_categories == "news"
+    assert settings.searxng_language == "en"
+    assert settings.searxng_http_concurrency == 6
 
 
 def test_stage_a_knobs_have_defaults() -> None:

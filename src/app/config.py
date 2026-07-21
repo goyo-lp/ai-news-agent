@@ -60,16 +60,16 @@ class Settings(BaseSettings):
     # its consumer (P2.1); the coordinator also reads this when delegating.
     max_topics_per_run: int = 5
 
-    # Tavily research-evidence knobs. Landed with their consumer — the
-    # tavily_search / tavily_extract tools (P2.3). Per Decision E, Tavily stays
-    # *only* as per-topic research evidence; the LinkedIn agent's own Tavily/RSS
-    # discovery path is dropped (discovery_* knobs are intentionally NOT ported).
-    tavily_api_key: str | None = None
-    tavily_base_url: str = "https://api.tavily.com"
-    tavily_topic: str = "news"
-    tavily_search_depth: str = "advanced"
-    tavily_time_range: str = "day"
-    tavily_http_concurrency: int = 6
+    # SearXNG research-evidence knobs. Search runs against a self-hosted SearXNG
+    # instance (keyless, no billing) — the operator points searxng_base_url at
+    # their instance (see docker-compose.searxng.yml). Per Decision E this stays
+    # *only* as per-topic research evidence; discovery is the RSS pipeline's job.
+    # An empty base URL means "not configured" -> the client returns dry-run mock
+    # results, so nothing requires a running instance to iterate.
+    searxng_base_url: str = ""
+    searxng_categories: str = "news"
+    searxng_language: str = "en"
+    searxng_http_concurrency: int = 6
 
     # Verifier model + bounds. Landed with their consumer — the verify_claim
     # tool (P2.4). Kept as its own knob (not a reuse of `openrouter_model`) so

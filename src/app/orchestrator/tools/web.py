@@ -1,21 +1,21 @@
-"""tavily_search / web_extract — the coordinator's research-evidence tools.
+"""web_search / web_extract — the coordinator's research-evidence tools.
 
-`tavily_search` still wraps
-:class:`app.orchestrator.services.tavily_client.TavilyClient` (search moves to
-self-hosted SearXNG in the next PR). `web_extract` now wraps the keyless local
-:func:`app.orchestrator.services.web_extract.extract_url_texts` (SSRF-guarded
-fetch + trafilatura) instead of Tavily's paid ``/extract`` endpoint. Per
-Decision E, this stays *only* as per-topic research evidence (the research
-subagent verifies a brief by running a focused query, then extracting the URLs
-it finds); the LinkedIn agent's own discovery path is dropped.
+`web_search` wraps :class:`app.orchestrator.services.searxng_client.SearxngClient`
+(self-hosted SearXNG — keyless, no billing). `web_extract` wraps the keyless
+local :func:`app.orchestrator.services.web_extract.extract_url_texts`
+(SSRF-guarded fetch + trafilatura). Neither depends on a paid third-party
+service. Per Decision E, these stay *only* as per-topic research evidence (the
+research subagent verifies a brief by running a focused query, then extracting
+the URLs it finds); the LinkedIn agent's own discovery path is dropped.
 
 Both tools follow the news / technical_rank / fetch_article pattern:
 async-only ``StructuredTool``, factory with lazily-resolved settings
 (tests inject directly), structured data persists to the orchestrator data
-dir, the return value is a compressed JSON summary (guiding principle #3) —
-never the result list or extracted text. `web_extract` does real local
-extraction with no dry-run mock, matching fetch_article; `tavily_search` still
-mocks when ``TAVILY_API_KEY`` is unset so a subagent can iterate keyless.
+dir under ``web/``, the return value is a compressed JSON summary (guiding
+principle #3) — never the result list or extracted text. `web_extract` does
+real local extraction with no dry-run mock, matching fetch_article; `web_search`
+returns deterministic mock results when ``SEARXNG_BASE_URL`` is unset so a
+subagent can iterate with no instance running.
 """
 from __future__ import annotations
 
@@ -31,25 +31,24 @@ from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
 from app.orchestrator.services.ranking import DiscoveredItem
-from app.orchestrator.services.tavily_client import (
-    TavilyClient,
-    TavilySearchError,
+from app.orchestrator.services.searxng_client import (
+    SearxngClient,
+    SearxngSearchError,
 )
 from app.orchestrator.services.web_extract import extract_url_texts
 from app.services.rss_client import normalize_url
 
 logger = logging.getLogger(__name__)
 
-_TAVILY_SUBDIR = "tavily"
-_SEARCH_SUBDIR = "search"
-# Extraction is no longer a Tavily surface (it's local trafilatura), so its
-# artifacts land under a provider-neutral `web/extracted/` dir.
+# All research-evidence artifacts live under a single provider-neutral `web/`
+# dir: search results in web/search/, extracted text in web/extracted/.
 _WEB_SUBDIR = "web"
+_SEARCH_SUBDIR = "search"
 _EXTRACT_SUBDIR = "extracted"
 
 
 def _slug(value: str, length: int = 12) -> str:
-    """Stable filesystem slug for a Tavily artifact (query or batch key).
+    """Stable filesystem slug for a research artifact (query or batch key).
     The hash alone keeps the filename filesystem-safe even for hostile input
     (a query scraped with path separators or unicode); the prefix-length cap
     keeps directory listings readable."""
@@ -57,26 +56,25 @@ def _slug(value: str, length: int = 12) -> str:
 
 
 # ---------------------------------------------------------------------------
-# tavily_search
+# web_search
 # ---------------------------------------------------------------------------
 
 
-class TavilySearchArgs(BaseModel):
+class WebSearchArgs(BaseModel):
     """Tool input. `query` is required (no best-guess default); `hours_back`
-    and `max_results` are optional and clamp to sensible Tavily ranges inside
-    the client, mirroring the reference defaults of 24h / 8 results."""
+    and `max_results` are optional, defaulting to 24h / 8 results."""
 
     query: str = Field(..., description="Natural-language research query.")
     hours_back: int | None = Field(
         default=None,
         description=(
-            "How far back to search, in hours. Maps to Tavily's `days` "
-            "param, clamped to [1, 7]. Omit to default to ~24h."
+            "How far back to search, in hours. Maps onto SearXNG's coarse "
+            "time_range bucket (day/week/month/year). Omit to default to ~24h."
         ),
     )
     max_results: int | None = Field(
         default=None,
-        description="Max Tavily results to return for this query. Omit to use the client default."
+        description="Max results to keep for this query. Omit to use the client default (8)."
     )
 
 
@@ -89,9 +87,11 @@ async def _run_search(args: dict[str, Any], settings: Settings) -> dict[str, Any
     hours_back = int(hours_back_raw) if hours_back_raw is not None else 24
     max_results_raw = args.get("max_results")
     max_results = int(max_results_raw) if max_results_raw is not None else 8
-    dry_run = not (settings.tavily_api_key or "").strip()
+    # No configured SearXNG instance -> dry-run mock (mirrors the old "no key"
+    # behavior), so the tool works before an instance is stood up.
+    dry_run = not (settings.searxng_base_url or "").strip()
 
-    client = TavilyClient(settings)
+    client = SearxngClient(settings)
     timeout = httpx.Timeout(settings.request_timeout_seconds)
     empty_summary = {
         "query": query,
@@ -110,14 +110,14 @@ async def _run_search(args: dict[str, Any], settings: Settings) -> dict[str, Any
                     max_results=max_results,
                     dry_run=dry_run,
                 )
-            except TavilySearchError as exc:
-                logger.warning("tavily_search failed for %r: %s", query, exc)
+            except SearxngSearchError as exc:
+                logger.warning("web_search failed for %r: %s", query, exc)
                 return {**empty_summary, "status": "error", "reason": str(exc)}
             except Exception as exc:
-                logger.warning("tavily_search unexpected for %r: %s", query, exc)
+                logger.warning("web_search unexpected for %r: %s", query, exc)
                 return {**empty_summary, "status": "error", "reason": f"{type(exc).__name__}: {exc}"}
     except Exception as exc:  # httpx.AsyncClient construction failure
-        logger.warning("tavily_search http client failed: %s", exc)
+        logger.warning("web_search http client failed: %s", exc)
         return {**empty_summary, "status": "error", "reason": f"{type(exc).__name__}: {exc}"}
 
     path = write_search_to_state(items, query, settings.orchestrator_data_dir)
@@ -131,23 +131,23 @@ async def _run_search(args: dict[str, Any], settings: Settings) -> dict[str, Any
 
 
 def write_search_to_state(items: list[DiscoveredItem], query: str, data_dir: str) -> Path:
-    """Serialize a Tavily search's results to ``tavily/search/<query-slug>.json``
-    and return the written path. Creates the dir if missing. Pure (no network):
+    """Serialize a search's results to ``web/search/<query-slug>.json`` and
+    return the written path. Creates the dir if missing. Pure (no network):
     testable with a tmp directory. Mirrors the news.py / technical_rank.py
     writers — the on-disk shape round-trips through ``DiscoveredItem``."""
-    root = Path(data_dir) / _TAVILY_SUBDIR / _SEARCH_SUBDIR
+    root = Path(data_dir) / _WEB_SUBDIR / _SEARCH_SUBDIR
     root.mkdir(parents=True, exist_ok=True)
     path = root / f"{_slug(query)}.json"
     path.write_text(
         json.dumps([i.model_dump(mode="json") for i in items], indent=2, default=str),
         encoding="utf-8",
     )
-    logger.info("Wrote %d Tavily search results for %r to %s", len(items), query, path)
+    logger.info("Wrote %d search results for %r to %s", len(items), query, path)
     return path
 
 
-def build_tavily_search_tool(settings: Settings | None = None) -> StructuredTool:
-    """Construct the tavily_search langchain tool."""
+def build_web_search_tool(settings: Settings | None = None) -> StructuredTool:
+    """Construct the web_search langchain tool (SearXNG-backed)."""
     bound_settings = settings
 
     async def _async(query: str, hours_back: int | None = None, max_results: int | None = None) -> str:
@@ -160,21 +160,22 @@ def build_tavily_search_tool(settings: Settings | None = None) -> StructuredTool
     return StructuredTool.from_function(
         func=None,
         coroutine=_async,
-        name="tavily_search",
+        name="web_search",
         description=(
-            "Run a Tavily news search for one query and persist the normalized "
-            "results to tavily/search/<query-slug>.json. Returns a JSON summary "
-            "with {query, result_count, status, reason, path} — never the results "
-            "themselves. Read them from `path` when `status == \"ok\"`. Falls "
-            "back to a mocked result set when TAVILY_API_KEY is unset so a "
-            "subagent can exercise this without a live key."
+            "Run a web news search for one query via the self-hosted SearXNG "
+            "instance (keyless, no third-party service) and persist the "
+            "normalized results to web/search/<query-slug>.json. Returns a JSON "
+            "summary with {query, result_count, status, reason, path} — never "
+            "the results themselves. Read them from `path` when `status == "
+            "\"ok\"`. Returns a mocked result set when SEARXNG_BASE_URL is unset "
+            "so a subagent can exercise this with no instance running."
         ),
-        args_schema=TavilySearchArgs,
+        args_schema=WebSearchArgs,
     )
 
 
 # ---------------------------------------------------------------------------
-# tavily_extract
+# web_extract
 # ---------------------------------------------------------------------------
 
 
@@ -290,5 +291,5 @@ def build_web_extract_tool(settings: Settings | None = None) -> StructuredTool:
 
 
 # Convenience singletons for `create_deep_agent(tools=[...])`.
-tavily_search_tool = build_tavily_search_tool()
+web_search_tool = build_web_search_tool()
 web_extract_tool = build_web_extract_tool()

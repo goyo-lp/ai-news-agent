@@ -253,7 +253,7 @@ def test_reconcile_verifier_payloads_verified_primary_wins_when_secondary_is_low
 
 async def test_verify_one_dry_run_returns_partially_verified_cautious_brief() -> None:
     """No OPENROUTER_API_KEY -> heuristic fallback path fires. Confidence
-    differs based on whether evidence was gathered (Tavily mock returns 3
+    differs based on whether evidence was gathered (SearXNG dry-run mock returns 3
     items per query -> >0 confidence).
     The summary is rewritten as cautious; status == partially_verified."""
     settings = _settings(api_key=None)
@@ -272,7 +272,7 @@ async def test_verify_one_dry_run_with_no_citations_uses_evidence_from_search(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """With no seed citations, the evidence pool comes entirely from the
-    verifier's Tavily-search queries. Tavily's dry-run `_mock_search` returns
+    verifier's SearXNG-search queries. The dry-run `_mock_search` returns
     3 templates × 4 queries, so evidence_texts is non-empty and the 0.6
     confidence branch fires. (The 0.4 branch is the 'no evidence at all'
     fallback — exercised by the next test.)"""
@@ -290,10 +290,10 @@ async def test_verify_one_dry_run_with_no_citations_uses_evidence_from_search(
 async def test_verify_one_dry_run_with_no_evidence_uses_lower_confidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """m5: when both the seed citation search and the Tavily mock return
+    """m5: when both the seed citation search and the SearXNG mock return
     nothing (an empty evidence_texts list), the heuristic confidence drops to
     0.4 — the 'no corroborating evidence' branch at brief_verifier.py:level.
-    Reach this by stubbing _mock_search to return [] so Tavily produces
+    Reach this by stubbing _mock_search to return [] so search produces
     nothing to corroborate."""
     settings = _settings(api_key=None)
     verifier = BriefVerifier(settings)
@@ -302,7 +302,7 @@ async def test_verify_one_dry_run_with_no_evidence_uses_lower_confidence(
         return []
 
     monkeypatch.setattr(
-        "app.orchestrator.services.tavily_client.TavilyClient.search_news",
+        "app.orchestrator.services.searxng_client.SearxngClient.search_news",
         _empty_search_news,
     )
 
@@ -341,6 +341,44 @@ async def test_verify_one_real_call_parses_verifier_payload(monkeypatch: pytest.
     assert verified.technical_significance == "Architecture is documented."
     # Both model notes survived the merge + dedup.
     assert any("sources confirm" in n for n in verified.verification_notes)
+
+
+async def test_verifier_uses_mock_search_evidence_when_searxng_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression (PR2 review #1): with the model key set but SEARXNG_BASE_URL
+    empty and dry_run=False, the verifier must still gather corroborating
+    evidence from the search mock — not silently run with none. Capture the
+    outgoing prompt and assert it carries search-derived evidence."""
+    import json as _json
+
+    settings = _settings(api_key="sk-test")  # searxng_base_url defaults to ""
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.content.decode("utf-8")
+        payload = {"verdict": "partially_verified", "confidence": 0.7, "notes": []}
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": _json.dumps(payload)}}]}
+        )
+
+    real = httpx.AsyncClient
+
+    def _factory(*args: object, **kwargs: object) -> httpx.AsyncClient:
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(svc_mod.httpx, "AsyncClient", _factory)
+    _stub_web_extract(monkeypatch)  # no real extraction: evidence must come from search
+
+    brief = _brief()
+    brief.citations = []  # so evidence can ONLY come from the search path
+    verified = await BriefVerifier(settings).verify_one(brief, hours_back=24, dry_run=False)
+
+    assert verified.verification_status == "partially_verified"
+    # The prompt carried search-derived evidence, not the empty-evidence placeholder.
+    assert "No extracted evidence available" not in captured["body"]
+    assert "new-reasoning-model" in captured["body"]  # a mock-search fixture URL
 
 
 async def test_verify_one_rejects_unknown_verdict_gracefully(

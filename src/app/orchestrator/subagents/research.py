@@ -38,9 +38,9 @@ from app.config import Settings, get_settings
 from app.orchestrator.models import build_openrouter_chat_model
 from app.orchestrator.schemas import ResearchBrief
 from app.orchestrator.tools.fetch import build_fetch_article_tool
-from app.orchestrator.tools.tavily import (
-    build_tavily_search_tool,
+from app.orchestrator.tools.web import (
     build_web_extract_tool,
+    build_web_search_tool,
 )
 from app.orchestrator.tools.verify_claim import build_verify_claim_tool
 
@@ -74,7 +74,7 @@ Work adaptively — you decide the sequence:
    to get the real article (SSRF-guarded, size-capped). Read the fetched
    content from the `path` it returns; the tool never returns the body inline.
 2. When you need independent corroboration or the primary source is weak, use
-   `tavily_search` for the claim and `web_extract` on the most relevant
+   `web_search` for the claim and `web_extract` on the most relevant
    result URLs. Read their artifacts from the returned `path`.
 3. Synthesize the brief. Extract what is *technically* new — a capability, a
    result, a shift — not marketing. Ground every claim in something you fetched
@@ -102,7 +102,7 @@ def build_research_subagent(settings: Settings | None = None) -> SubAgent:
 
     Settings resolve lazily when not supplied, mirroring the tool factories.
     Tools are built from the same Settings so they share one config (data dir,
-    OpenRouter/Tavily keys). The Stage-B model is a live OpenRouter chat model;
+    OpenRouter key, SearXNG URL). The Stage-B model is a live OpenRouter chat model;
     it constructs without a key (dry-run safe) and only needs one to run."""
     s = settings or get_settings()
     return SubAgent(
@@ -110,14 +110,14 @@ def build_research_subagent(settings: Settings | None = None) -> SubAgent:
         description=(
             "Research one ranked AI news topic (topic_id + primary_url) into a "
             "verified ResearchBrief written to briefs/<topic_id>.json. Decides "
-            "for itself whether to fetch the real article, corroborate via "
-            "Tavily, and what is technically new; then verifies the brief. "
+            "for itself whether to fetch the real article, corroborate via web "
+            "search, and what is technically new; then verifies the brief. "
             "Delegate one topic per call."
         ),
         system_prompt=_system_prompt(),
         tools=[
             build_fetch_article_tool(s),
-            build_tavily_search_tool(s),
+            build_web_search_tool(s),
             build_web_extract_tool(s),
             build_verify_claim_tool(s),
         ],
