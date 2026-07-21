@@ -140,6 +140,26 @@ class ResearchBrief(BaseModel):
     verification_notes: list[str] = Field(default_factory=list)
 
 
+class StyleProfile(BaseModel):
+    """The author's writing-voice fingerprint, built from sample posts and read
+    by the writer subagent (P4.2) alongside the linkedin-voice skill (P3.1).
+
+    Field parity with StyleProfile in
+    reference/linkedin-agent/src/app/schemas/models.py: identical fields/types.
+    All fields default so an empty profile (no samples) is still a valid
+    contract — the loader tool (P3.2) falls back to a default profile rather
+    than emitting a partial object.
+    """
+
+    sample_count: int = 0
+    sentence_count: int = 0
+    avg_sentence_words: float = 0.0
+    common_openers: list[str] = Field(default_factory=list)
+    vocabulary: list[str] = Field(default_factory=list)
+    tone_traits: list[str] = Field(default_factory=list)
+    cta_patterns: list[str] = Field(default_factory=list)
+
+
 class PostProposal(BaseModel):
     """A drafted post proposal awaiting the quality gate and delivery.
 

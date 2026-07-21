@@ -41,9 +41,10 @@ def test_settings_rejects_unknown_ported_knobs() -> None:
     extra pre-declared fields slip in.
 
     Stage A models + max_topics_per_run (P2.1 technical_rank), Tavily knobs
-    (P2.3 tavily tools), and verifier knobs (P2.4 verify_claim) now have
-    consumers; the remaining ported knobs (Stage B, deep-agent bounds,
-    orchestration limits) stay deferred until their consumer PRs land."""
+    (P2.3 tavily tools), verifier knobs (P2.4 verify_claim), and the
+    style-profile paths (P3.2 load_style_profile) now have consumers; the
+    remaining ported knobs (Stage B, deep-agent bounds, orchestration limits)
+    stay deferred until their consumer PRs land."""
     settings = Settings(_env_file=None)
     for removed in (
         "openrouter_stage_b_research_model",
@@ -54,10 +55,16 @@ def test_settings_rejects_unknown_ported_knobs() -> None:
         "adaptive_investigation_concurrency",
         "telegram_send_concurrency",
         "outputs_dir",
-        "style_profile_file",
-        "style_samples_dir",
     ):
         assert not hasattr(settings, removed), f"{removed} should not be on Settings yet"
+
+
+def test_style_profile_knobs_have_defaults() -> None:
+    """P3.2 lands the style-profile paths with their consumer (load_style_profile).
+    The seed profile and writing-samples dir default under data/."""
+    settings = Settings(_env_file=None)
+    assert settings.style_profile_file == "data/style_profile.json"
+    assert settings.style_samples_dir == "data/style_samples"
 
 
 def test_verifier_knobs_have_defaults() -> None:
