@@ -139,7 +139,13 @@ def test_build_invokes_create_deep_agent_with_expected_shape(tmp_path: Path, mon
     assert Path(backend.cwd).resolve() == tmp_path.resolve()
 
     # Other wiring choices this PR owns:
-    assert captured.get("system_prompt") is None  # P5.3 owns the orchestration prompt
+    # P5.3 wires COORDINATOR_SYSTEM_PROMPT (built from settings, not the
+    # module-level singleton); pin that it landed as a non-None string that
+    # carries the run-order + max_topics guardrail the model reads.
+    system_prompt = captured.get("system_prompt")
+    assert isinstance(system_prompt, str)
+    assert "PIPELINE" in system_prompt
+    assert "max_topics_per_run" in system_prompt
     assert captured.get("skills") is None  # the linkedin-voice skill is writer-subagent-owned
     assert captured.get("name") == COORDINATOR_AGENT_NAME
 

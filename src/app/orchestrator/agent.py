@@ -41,10 +41,17 @@ What it wires and what it deliberately does *not*:
   and invites the coordinator model to author posts in the author's voice
   — exactly the work that was supposed to be delegated.
 
-- **system_prompt** = ``None`` for now. P5.3 owns the orchestration
-  prompt. Acceptance for *this* PR is "Agent builds; dry-run invoke
-  completes without error" — deepagents' default prompt is sufficient for
-  that; the orchestration plan lands next PR.
+- **system_prompt** = ``build_coordinator_system_prompt(s)`` (P5.3).
+  The orchestration prompt prescribes the run order (write_todos -> fetch
+  -> rank -> per-topic delegate -> quality-gate -> deliver), the
+  guardrails (max topics, no fabricated URLs, single-topic delegation),
+  and the principle-#3 invariant that structured data lives on disk and
+  tool/task returns are compressed pointers. Interpolates
+  ``max_topics_per_run`` so the guardrail is in-writing inside the
+  contract block the model reads, not just in settings. Built from
+  ``settings`` (not the module-level singleton) so the live settings
+  carry through to the prompt — important when an operator raises
+  ``max_topics_per_run`` at runtime.
 
 - **context_schema** = ``None``. No run-scoped context the tools need to
   share yet (the LiveRunContext — run id, profile, dry-run bit — would
@@ -72,6 +79,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from app.config import Settings, get_settings
 from app.orchestrator.models import build_openrouter_chat_model
+from app.orchestrator.prompts import build_coordinator_system_prompt
 from app.orchestrator.state import build_orchestrator_backend
 from app.orchestrator.subagents.research import build_research_subagent
 from app.orchestrator.subagents.writer import build_writer_subagent
@@ -138,11 +146,11 @@ def build_coordinator_agent(
         tools=tools,
         subagents=subagents,
         backend=backend,
-        # No coordinator-level system prompt yet — P5.3 owns the
-        # orchestration prompt (write_todos -> fetch -> rank -> per-topic
-        # delegate -> quality-gate -> deliver). deepagents' default prompt
-        # is sufficient for the "build + invoke completes" acceptance here.
-        system_prompt=None,
+        # Orchestration prompt lands in P5.3 (prompts.py); built from
+        # settings so a runtime dial-up of `max_topics_per_run` lands in the
+        # contract block the model reads, not just in the clamp the ranker
+        # enforces downstream.
+        system_prompt=build_coordinator_system_prompt(s),
         skills=None,
         name=COORDINATOR_AGENT_NAME,
     )
