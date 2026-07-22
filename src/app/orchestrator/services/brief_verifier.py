@@ -15,9 +15,9 @@ rewritten ``summary`` / ``technical_significance`` / ``business_impact`` /
 
 Intentional divergences from the reference (documented here so the port's
 gaps don't drift silently):
-  1. ``api_usage_tracker.record_openrouter_http_response`` is NOT ported here:
-     usage/cost tracking lands in Phase 7 (PR P7.2). A ``# TODO(P7.2)`` marks
-     the seam so the integrator knows exactly where to wire the counter.
+  1. Usage recording goes through the host's ``orchestrator.usage`` module
+     (``record_openrouter_http_response``, wired at the httpx response, P7.2),
+     not the reference's ``api_usage_tracker``.
   2. The verifier model uses ``openrouter_verifier_model`` (newly added with
      this consumer) plus optional ``openrouter_verifier_secondary_model`` for
      the ensemble path. The reference read ``openrouter_model`` — which in the
@@ -51,6 +51,7 @@ from app.config import Settings
 from app.orchestrator.schemas import ResearchBrief
 from app.orchestrator.services.searxng_client import SearxngClient
 from app.orchestrator.services.web_extract import extract_url_texts
+from app.orchestrator.usage import record_openrouter_http_response
 
 logger = logging.getLogger(__name__)
 
@@ -297,6 +298,9 @@ class BriefVerifier:
             "model": model,
             "temperature": 0.1,
             "max_tokens": 900,
+            # Ask OpenRouter to include cost in the usage block so the P7.2
+            # tracker records real spend, not just tokens.
+            "usage": {"include": True},
             "messages": [
                 {
                     "role": "system",
@@ -326,8 +330,7 @@ class BriefVerifier:
         )
         response.raise_for_status()
         response_payload = response.json()
-        # TODO(P7.2): wire api_usage_tracker.record_openrouter_http_response
-        # here once Phase 7 introduces usage tracking.
+        record_openrouter_http_response(model=model, payload=response_payload)
         content = str(response_payload["choices"][0]["message"]["content"])
         return _parse_json_payload(content)
 

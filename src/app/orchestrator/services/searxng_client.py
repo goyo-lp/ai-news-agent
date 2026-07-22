@@ -28,6 +28,7 @@ import httpx
 
 from app.config import Settings
 from app.orchestrator.services.ranking import DiscoveredItem, domain_from_url
+from app.orchestrator.usage import record_searxng_search
 from app.services.rss_client import normalize_url
 
 logger = logging.getLogger(__name__)
@@ -131,6 +132,8 @@ class SearxngClient:
             data = response.json()
         except Exception as exc:
             raise SearxngSearchError(f"SearXNG search request failed: {exc}") from exc
+
+        record_searxng_search()  # observability only — self-hosted, no cost
 
         results = data.get("results") or []
         items: list[DiscoveredItem] = []

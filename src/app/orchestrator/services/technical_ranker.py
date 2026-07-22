@@ -10,11 +10,9 @@ Two paths:
 Intentional divergences from the reference (three; all documented here so a
 future maintainer doesn't "restore" reference behavior and silently shift
 hype-detection):
-  1. ``record_openrouter_http_response`` from the reference's api_usage_tracker
-     is NOT ported here: usage/cost tracking lands in Phase 7 (PR P7.2). The
-     Stage-A ranking should not acquire a cross-module dependency on that
-     work-in-progress module. A ``# TODO(P7.2)`` marks the seam so the
-     integrator knows exactly where to wire it.
+  1. Usage recording goes through the host's ``orchestrator.usage`` module
+     (``record_openrouter_http_response``, wired at the httpx response, P7.2),
+     not the reference's ``api_usage_tracker``.
   2. The heuristic shares the ranker's keyword sets (``_TECH_KEYWORDS`` /
      ``_BUSINESS_KEYWORDS`` / ``_LOW_SIGNAL_KEYWORDS``) with
      :mod:`ranking`'s scorer, instead of maintaining its own copy of the
@@ -44,6 +42,7 @@ import httpx
 
 from app.config import Settings
 from app.orchestrator.services.ranking import DiscoveredItem, _TECH_KEYWORDS
+from app.orchestrator.usage import record_openrouter_http_response
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +156,9 @@ class TechnicalRanker:
             "model": model,
             "temperature": 0.1,
             "max_tokens": 300,
+            # Ask OpenRouter to include cost in the usage block so the P7.2
+            # tracker records real spend, not just tokens.
+            "usage": {"include": True},
             "messages": [
                 {
                     "role": "system",
@@ -185,9 +187,7 @@ class TechnicalRanker:
         )
         response.raise_for_status()
         response_payload = response.json()
-        # TODO(P7.2): wire api_usage_tracker.record_openrouter_http_response here
-        # once Phase 7 introduces usage tracking. Left out for now so the ranker
-        # has no cross-module dependency on a not-yet-landed module.
+        record_openrouter_http_response(model=model, payload=response_payload)
         content = str(response_payload["choices"][0]["message"]["content"])
         parsed = _parse_json_payload(content)
         return TechnicalAssessment(

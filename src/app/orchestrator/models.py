@@ -18,6 +18,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
 from app.config import Settings
+from app.orchestrator.usage import USAGE_CALLBACK_HANDLER
 
 # ChatOpenAI refuses to construct with an empty api key (it enforces credentials
 # eagerly, not at request time). Subagent specs must still build for dry-run and
@@ -49,5 +50,9 @@ def build_openrouter_chat_model(settings: Settings, *, model: str) -> ChatOpenAI
         model=model,
         api_key=SecretStr(settings.openrouter_api_key or _DRY_RUN_PLACEHOLDER_KEY),
         base_url=settings.openrouter_base_url,
+        # Records token usage for every call into the active run (P7.2). The
+        # handler is a no-op outside a track_run_usage block, so this is inert
+        # in tests and dry runs.
+        callbacks=[USAGE_CALLBACK_HANDLER],
         **kwargs,
     )
