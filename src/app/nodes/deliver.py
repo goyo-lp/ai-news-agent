@@ -19,7 +19,13 @@ async def deliver_node(state: AgentState) -> AgentState:
 
     articles = parse_articles(state.get("articles_selected"))
     telegram_client = TelegramClient(settings)
-    results = await telegram_client.send_articles(articles, dry_run=dry_run)
+    # The news digest path routes to the "news" bot explicitly (P6.1
+    # made this kwarg first-class; previously the news path was the
+    # only path and consumed the legacy top-level credentials directly).
+    # Pinning the name here means a future multi-bot misconfiguration
+    # surfaces as a real "news profile not configured" error instead of
+    # silently routing the digest to the LinkedIn chat (or vice versa).
+    results = await telegram_client.send_articles(articles, dry_run=dry_run, bot="news")
 
     if not dry_run:
         record_deliveries(
