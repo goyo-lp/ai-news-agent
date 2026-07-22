@@ -46,7 +46,7 @@ WRITER_SUBAGENT_NAME = "writer-subagent"
 AUTHORED_POST_FIELDS = list(PostProposal.model_fields)
 
 
-def _system_prompt() -> str:
+def _system_prompt(data_dir: str) -> str:
     authored = ", ".join(AUTHORED_POST_FIELDS)
     return f"""You write exactly ONE LinkedIn post from a verified research brief, in the author's voice.
 
@@ -55,25 +55,31 @@ SKILL.md in full — it defines the voice, structure, and the hard constraints
 your post must satisfy. Follow it; it is the source of truth for how the post
 should sound.
 
+FILE PATHS: your data directory is `{data_dir}` (an absolute path). Every
+`read_file` / `write_file` call MUST use an absolute path under it — e.g.
+`{data_dir}/drafts/<post_id>.json`. Never pass a bare relative path like
+`drafts/<post_id>.json`; it will not resolve.
+
 You are given a topic_id and a post_id. Then:
 
-1. Read the verified brief `briefs/<topic_id>.verified.json` (fall back to
-   `briefs/<topic_id>.json` if the verified file is absent). Every factual
-   claim in your post must trace to this brief — never invent numbers, quotes,
-   capabilities, or URLs, and cite only URLs the brief provides. If the brief's
-   verification_status is not "verified", soften or drop the affected claims.
-2. Read the author's `style_profile.json` for voice signals (common openers,
-   vocabulary, tone) and let them shape the phrasing.
-3. Compose the post and write it to `drafts/<post_id>.json` with `write_file`,
-   as valid JSON validating against the PostProposal schema. Author these
-   fields: {authored}. Set supporting_topic_ids to exactly [topic_id] and
-   citation_urls from the brief's citations.
+1. Read the verified brief `{data_dir}/briefs/<topic_id>.verified.json` (fall
+   back to `{data_dir}/briefs/<topic_id>.json` if the verified file is absent).
+   Every factual claim in your post must trace to this brief — never invent
+   numbers, quotes, capabilities, or URLs, and cite only URLs the brief
+   provides. If the brief's verification_status is not "verified", soften or
+   drop the affected claims.
+2. Read the author's `{data_dir}/style_profile.json` for voice signals (common
+   openers, vocabulary, tone) and let them shape the phrasing.
+3. Compose the post and write it to `{data_dir}/drafts/<post_id>.json` with
+   `write_file`, as valid JSON validating against the PostProposal schema.
+   Author these fields: {authored}. Set supporting_topic_ids to
+   exactly [topic_id] and citation_urls from the brief's citations.
 4. Call `quality_gate` with the post_id. It enforces, deterministically:
    body 105–182 words (measured after a light jargon/CTA clean), exactly one
    supporting_topic_id, at least 3 hashtags, and no hype markers. If it returns
    status="failed", read the reasons from the verdict file at the returned
-   `path`, fix the draft (rewrite drafts/<post_id>.json), and re-gate. Repeat
-   until it passes; do not ship a failing draft.
+   `path`, fix the draft (rewrite `{data_dir}/drafts/<post_id>.json`), and
+   re-gate. Repeat until it passes; do not ship a failing draft.
 
 Rules:
 - The draft file is your deliverable, not your chat reply. Return only a short
@@ -95,6 +101,7 @@ def build_writer_subagent(settings: Settings | None = None) -> SubAgent:
     coordinator's backend root (see module docstring)."""
     s = settings or get_settings()
     skills_source = str(Path(s.skills_dir).resolve())
+    data_dir = str(Path(s.orchestrator_data_dir).resolve())
     return SubAgent(
         name=WRITER_SUBAGENT_NAME,
         description=(
@@ -103,7 +110,7 @@ def build_writer_subagent(settings: Settings | None = None) -> SubAgent:
             "briefs/<topic_id>.verified.json + style_profile.json, writes "
             "drafts/<post_id>.json (a PostProposal). Delegate one topic per call."
         ),
-        system_prompt=_system_prompt(),
+        system_prompt=_system_prompt(data_dir),
         tools=[build_quality_gate_tool(s)],
         model=build_openrouter_chat_model(
             s, model=s.openrouter_stage_b_writer_model

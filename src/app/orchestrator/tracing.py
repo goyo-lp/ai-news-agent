@@ -14,10 +14,10 @@ no env side effects and no ``Settings`` dependency.
 """
 from __future__ import annotations
 
-from typing import Any
+from langchain_core.runnables import RunnableConfig
 
 
-def coordinator_run_config(*, run_id: str, dry_run: bool) -> dict[str, Any]:
+def coordinator_run_config(*, run_id: str, dry_run: bool) -> RunnableConfig:
     """Build the LangGraph run ``config`` for one coordinator run.
 
     Pass the result to ``agent.ainvoke(state, config)``; LangGraph threads the
