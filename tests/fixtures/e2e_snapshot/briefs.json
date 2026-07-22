@@ -1,0 +1,30 @@
+[
+  {
+    "topic_id": "topic-a",
+    "headline": "Test headline",
+    "summary": "Test summary that does not contain hype markers and is long enough.",
+    "technical_significance": "A specific attention mechanism change in the model.",
+    "business_impact": "Lower inference cost at parity quality for image use cases.",
+    "why_now": "Released yesterday in a stable build.",
+    "key_points": [
+      "attention refactor",
+      "throughput improvement"
+    ],
+    "risks": [
+      "real-world performance unproven"
+    ],
+    "citations": [
+      {
+        "title": "Test citation",
+        "url": "https://example.com/topic-a",
+        "domain": "example.com",
+        "published_at": null
+      }
+    ],
+    "verification_status": "verified",
+    "verification_confidence": 0.8,
+    "verification_notes": [
+      "mock verification note"
+    ]
+  }
+]

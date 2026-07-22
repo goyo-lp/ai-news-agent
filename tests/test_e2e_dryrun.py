@@ -57,45 +57,27 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.messages import AIMessage
 from langgraph.graph.state import CompiledStateGraph
 
 from app.config import Settings
-from app.orchestrator import agent as agent_module
 from app.orchestrator.agent import build_coordinator_agent
 from app.orchestrator.prompts import (
     COORDINATOR_PROMPT_SECTIONS,
     COORDINATOR_SYSTEM_PROMPT,
     build_coordinator_system_prompt,
 )
-from app.orchestrator.schemas import CuratedArticle, PostProposal
-
-
-def _settings(tmp_path: Path, **overrides: Any) -> Settings:
-    return Settings(
-        _env_file=None,
-        orchestrator_data_dir=str(tmp_path),
-        openrouter_api_key="",  # disables live OpenRouter; tools fall back to deterministic paths
-        openrouter_coordinator_model="coordinator-sentinel",
-        **overrides,
-    )
-
-
-def _fixture_article(topic_id: str = "topic-a") -> CuratedArticle:
-    """A single CuratedArticle that survives technical_rank's hype-filter
-    and clustering into one topic — deterministic across runs."""
-    return CuratedArticle(
-        id=topic_id,
-        source_name="Test Source",
-        title="Stable Diffusion 3.5 releases with new attention mechanism",
-        url=f"https://example.com/{topic_id}",
-        summary="A new attention mechanism improving throughput of image models.",
-        score=0.9,
-        duplicate_count=1,
-        cluster_size=1,
-    )
+from app.orchestrator.schemas import PostProposal
+from e2e_support import (
+    ScriptedModel as _ScriptedModel,
+    abs_path as _abs,
+    fixture_article as _fixture_article,
+    mock_run_curation_one_article as _mock_run_curation_one_article,
+    settings_for as _settings,
+    stub_brief_json as _stub_brief_json,
+    stub_draft_json as _stub_draft_json,
+    tool_call as _tool_call,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -224,76 +206,6 @@ def test_module_level_singleton_matches_default_settings() -> None:
 # --------------------------------------------------------------------------- #
 
 
-class _ScriptedModel(BaseChatModel):
-    """Fake chat model that emits a pre-scripted sequence of AIMessages.
-
-    Each AIMessage may carry ``tool_calls`` (mid-sequence) or be plain text
-    (final). deepagents' loop reads them in order, dispatches the tool call,
-    feeds the ToolMessage back, and re-invokes the model for the next
-    scripted message. When the scripted iterator is exhausted, the model
-    emits a final plain AIMessage — the loop terminates.
-
-    Overrides ``bind_tools`` to return ``self`` so deepagents' middleware
-    stack can build the agent (the default ``BaseChatModel.bind_tools``
-    raises ``NotImplementedError``); no tool call is ever emitted by the
-    stub bound call, so no recursion through ``bound_model.ainvoke``.
-    """
-
-    script: list[AIMessage] = []
-
-    def _generate(
-        self,
-        messages: list[BaseMessage],
-        stop: list[str] | None = None,
-        run_manager: Any = None,
-        **kwargs: Any,
-    ) -> ChatResult:
-        # The script is consumed in order; when exhausted, emit a no-tool
-        # AIMessage so the loop terminates the next model step.
-        idx = getattr(self, "_idx", 0)
-        if idx < len(self.script):
-            msg = self.script[idx]
-            self._idx = idx + 1  # type: ignore[attr-defined]
-        else:
-            msg = AIMessage(content="Done.")
-        return ChatResult(generations=[ChatGeneration(message=msg)])
-
-    async def _agenerate(
-        self,
-        messages: list[BaseMessage],
-        stop: list[str] | None = None,
-        run_manager: Any = None,
-        **kwargs: Any,
-    ) -> ChatResult:
-        return self._generate(messages, stop, run_manager, **kwargs)
-
-    def bind_tools(self, tools: Any, **kwargs: Any) -> "_ScriptedModel":  # type: ignore[override]
-        return self
-
-    @property
-    def _llm_type(self) -> str:
-        return "scripted"
-
-
-def _tool_call(name: str, args: dict[str, Any]) -> AIMessage:
-    """Build an AIMessage carrying one tool call. The deepagents ToolNode
-    inspects `tool_calls`, which is a list of dicts with `name`, `args`,
-    `id`."""
-    import uuid
-
-    return AIMessage(
-        content="",
-        tool_calls=[
-            {
-                "name": name,
-                "args": args,
-                "id": f"call-{uuid.uuid4().hex[:8]}",
-                "type": "tool_call",
-            }
-        ],
-    )
-
-
 def _build_scripted_coordinator(
     tmp_path: Path,
     *,
@@ -307,41 +219,6 @@ def _build_scripted_coordinator(
     return build_coordinator_agent(_settings(tmp_path), model=fake)
 
 
-def _abs(data_dir: Path, *parts: str) -> str:
-    """Resolve a relative orchestrator path against the data dir's absolute
-    location, returning the string form deepagents' ``write_file`` middleware
-    expects — the middleware's ``validate_path`` then passes it through
-    unchanged (it's already absolute) and the P5.1 mount writes it on real
-    disk. See the module docstring for the path-semantics + production
-    scope-out context."""
-    return str(data_dir.joinpath(*parts))
-
-
-def _stub_brief_json(topic_id: str) -> str:
-    """A valid ResearchBrief JSON the coordinator writes (in lieu of the
-    research subagent running for real). The writer-equivalent step in this
-    test only inspects ``verification_status``, so we set ``verified`` and
-    empty everything else deterministically."""
-    return json.dumps(
-        {
-            "topic_id": topic_id,
-            "headline": "Test headline",
-            "summary": "Test summary that does not contain hype markers and is long enough.",
-            "technical_significance": "A specific attention mechanism change in the model.",
-            "business_impact": "Lower inference cost at parity quality for image use cases.",
-            "why_now": "Released yesterday in a stable build.",
-            "key_points": ["attention refactor", "throughput improvement"],
-            "risks": ["real-world performance unproven"],
-            "citations": [
-                {"title": "Test citation", "url": f"https://example.com/{topic_id}", "domain": "example.com"}
-            ],
-            "verification_status": "verified",
-            "verification_confidence": 0.8,
-            "verification_notes": ["mock verification note"],
-        }
-    )
-
-
 def _stub_verified_brief_json(topic_id: str) -> str:
     """A verified ResearchBrief JSON the coordinator writes (in lieu of the
     verify_claim tool running for real on a stubbed brief). The content here
@@ -351,57 +228,6 @@ def _stub_verified_brief_json(topic_id: str) -> str:
     files itself, bypassing the verifier). Testing that delta is the
     verify_claim tool's own unit tests' job (see test_tool_verify_claim.py)."""
     return _stub_brief_json(topic_id)
-
-
-def _stub_draft_json(post_id: str, topic_id: str) -> str:
-    """A valid PostProposal JSON that passes the quality gate. Body word count
-    in [105, 182]; exactly one supporting_topic_id; >=3 hashtags; no hype
-    markers. The cleaned-word-count and other gate checks all pass."""
-    body_words = (
-        "Stable Diffusion 3.5 ships a new attention mechanism that lowers "
-        "the real cost of running image models at parity quality. The change "
-        "is a small rewrite of how the model attends across patches and "
-        "shows up as a throughput improvement in the release notes. "
-        "Independent benchmarks are limited at this stage. Teams building on "
-        "the SDK should pin their current model version and test the new path "
-        "in parallel before switching production traffic. The spend math is "
-        "straightforward: if inference was your bottleneck, this likely moves "
-        "the per-image cost down without regressing fidelity. For research "
-        "workloads the gain is minor. For production serving, this is one of "
-        "the more useful steady improvements."
-    )
-    assert 105 <= len(body_words.split()) <= 182, "draft body must be in the gate's word window"
-    return json.dumps(
-        {
-            "post_id": post_id,
-            "angle": "steady improvement",
-            "headline": "Stable Diffusion 3.5's quiet attention refactor",
-            "body": body_words,
-            "hashtags": ["#stablediffusion", "#attention", "#inference"],
-            "supporting_topic_ids": [topic_id],
-            "citation_urls": [f"https://example.com/{topic_id}"],
-            "confidence": 0.8,
-        }
-    )
-
-
-def _mock_run_curation_one_article(
-    article: CuratedArticle, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Patch ``news.run_curation`` to skip the real pipeline and return a
-    single CuratedArticle (the fixture date's only article)."""
-
-    async def _fake_run_curation(
-        limit: int | None = None, settings: Settings | None = None
-    ) -> tuple[list[CuratedArticle], int]:
-        return [article], 1
-
-    monkeypatch.setattr(agent_module, "run_curation", _fake_run_curation, raising=False)
-    # The news tool imports `run_curation` at module load — patch the
-    # attribute in news.py's module namespace too.
-    from app.orchestrator.tools import news as tools_news
-
-    monkeypatch.setattr(tools_news, "run_curation", _fake_run_curation)
 
 
 def test_e2e_dryrun_yields_one_post_proposal_from_fixture_date(
