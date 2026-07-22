@@ -150,6 +150,88 @@ class TelegramClient:
 
         return await self._send_text(client, article, text_message, profile)
 
+    async def send_message(
+        self,
+        text: str,
+        *,
+        bot: BotName = "news",
+        dry_run: bool = False,
+        disable_web_page_preview: bool = True,
+    ) -> dict[str, Any]:
+        """Send a single plain-text message to the named bot's chat.
+
+        Used by the coordinator's ``deliver_telegram`` tool (P6.2) to ship
+        a LinkedIn post proposal body to the linkedin bot. Sequential
+        (per-message) send — callers that need to batch many proposals
+        should call this once per proposal and let the queue ordering
+        preserve arrival order in-channel.
+
+        ``disable_web_page_preview=True`` by default: a post body cites
+        supporting URLs in prose; Telegram's auto-preview would pollute
+        the post with thumbnail cards the author didn't curate. The
+        news-digest path doesn't use this entry point (it uses
+        ``send_article`` which renders per-article previews explicitly).
+
+        Dry-run preview carries the bot name + the (truncated) text so
+        the coordinator's surface summary can report the destination
+        without re-resolving config — parity with the article-path's
+        dry-run preview shape from P6.1.
+        """
+        timeout = httpx.Timeout(self.settings.request_timeout_seconds)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            return await self._send_text_message(
+                client,
+                text=text,
+                bot=bot,
+                dry_run=dry_run,
+                disable_web_page_preview=disable_web_page_preview,
+            )
+
+    async def _send_text_message(
+        self,
+        client: httpx.AsyncClient,
+        text: str,
+        *,
+        bot: BotName,
+        dry_run: bool,
+        disable_web_page_preview: bool,
+    ) -> dict[str, Any]:
+        if dry_run:
+            preview = text[: TELEGRAM_TEXT_LIMIT]
+            return {
+                "status": "dry_run",
+                "bot": bot,
+                "preview": preview,
+            }
+
+        profile = self.settings.bot_profile(bot)
+        if profile is None or not profile.is_complete():
+            return {
+                "status": "error",
+                "bot": bot,
+                "error": f"Telegram bot profile {bot!r} is not configured "
+                "(token + chat_id required).",
+            }
+
+        payload = {
+            "chat_id": profile.chat_id,
+            "text": text,
+            "parse_mode": self.settings.telegram_parse_mode,
+            "disable_web_page_preview": disable_web_page_preview,
+        }
+        sent = await self._post_with_retry(client, "sendMessage", payload, profile)
+        if sent.get("ok"):
+            return {
+                "status": "sent",
+                "bot": profile.name,
+                "message_id": sent["result"].get("message_id"),
+            }
+        return {
+            "status": "error",
+            "bot": profile.name,
+            "error": sent.get("description", "Telegram send failed."),
+        }
+
     async def _send_photo(
         self,
         client: httpx.AsyncClient,
