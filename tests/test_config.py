@@ -120,6 +120,34 @@ def test_stage_a_knobs_have_defaults() -> None:
     assert settings.max_topics_per_run == 5
 
 
+def test_per_subagent_models_resolve_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """P7.3 acceptance: 'Models resolved from env; override test passes.' Each
+    agent tier (Stage-A ranker, verifier, Stage-B research, Stage-B writer,
+    coordinator) is an independent env-driven knob. Overriding all five to
+    *distinct* values and asserting each resolves to its own proves both that
+    the config reads from env and that the knobs don't alias each other — so an
+    operator can point one tier at a stronger model without touching the rest.
+    (That an overridden knob then flows into the model builder is covered per
+    tier by the subagent/agent build tests.)"""
+    overrides = {
+        "OPENROUTER_STAGE_A_MODEL": "vendor/ranker-model",
+        "OPENROUTER_VERIFIER_MODEL": "vendor/verifier-model",
+        "OPENROUTER_STAGE_B_RESEARCH_MODEL": "vendor/research-model",
+        "OPENROUTER_STAGE_B_WRITER_MODEL": "vendor/writer-model",
+        "OPENROUTER_COORDINATOR_MODEL": "vendor/coordinator-model",
+    }
+    for key, value in overrides.items():
+        monkeypatch.setenv(key, value)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.openrouter_stage_a_model == "vendor/ranker-model"
+    assert settings.openrouter_verifier_model == "vendor/verifier-model"
+    assert settings.openrouter_stage_b_research_model == "vendor/research-model"
+    assert settings.openrouter_stage_b_writer_model == "vendor/writer-model"
+    assert settings.openrouter_coordinator_model == "vendor/coordinator-model"
+
+
 def test_news_bot_profile_falls_back_to_legacy_credentials() -> None:
     """Backward compat: a repo configured before bot-profile env vars existed
     keeps delivering the digest unchanged — the `news` profile is backfilled
