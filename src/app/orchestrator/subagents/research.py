@@ -32,6 +32,8 @@ research. This module owns the spec; the coordinator owns the clock.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from deepagents import SubAgent
 
 from app.config import Settings, get_settings
@@ -59,13 +61,20 @@ AUTHORED_BRIEF_FIELDS = [
 ]
 
 
-def _system_prompt() -> str:
+def _system_prompt(data_dir: str) -> str:
     authored = ", ".join(AUTHORED_BRIEF_FIELDS)
     return f"""You research exactly ONE AI news topic and produce a verified research brief.
 
 You are given one topic candidate: a topic_id, a title, a summary_hint, a
 primary_url, and optional supporting_urls. Your job is to turn it into a
-grounded ResearchBrief written to `briefs/<topic_id>.json`, then verify it.
+grounded ResearchBrief written to `{data_dir}/briefs/<topic_id>.json`, then
+verify it.
+
+FILE PATHS: your data directory is `{data_dir}` (an absolute path). Every
+`write_file` / `read_file` call MUST use an absolute path under it — e.g.
+`{data_dir}/briefs/<topic_id>.json`. Never pass a bare relative path like
+`briefs/<topic_id>.json`; it will not resolve. Tool results already return
+absolute artifact paths — read them from the `path` the tool gives you.
 
 Work adaptively — you decide the sequence:
 
@@ -83,13 +92,13 @@ Work adaptively — you decide the sequence:
    result, a shift — not marketing. Ground every claim in something you fetched
    or searched; never invent numbers, quotes, capabilities, or URLs. Cite only
    URLs you actually retrieved.
-4. Write `briefs/<topic_id>.json` with `write_file`. It must be valid JSON that
-   validates against the ResearchBrief schema. Author these fields: {authored}.
-   Do NOT set the verification_* fields — the next step fills them.
+4. Write `{data_dir}/briefs/<topic_id>.json` with `write_file`. It must be valid
+   JSON that validates against the ResearchBrief schema. Author these fields:
+   {authored}. Do NOT set the verification_* fields — the next step fills them.
 5. Call `verify_claim` with the topic_id. It checks the brief against
-   independent evidence and writes `briefs/<topic_id>.verified.json`. If it
-   reports insufficient evidence, soften the affected claims in the brief and
-   re-verify rather than overstating.
+   independent evidence and writes `{data_dir}/briefs/<topic_id>.verified.json`
+   itself. If it reports insufficient evidence, soften the affected claims in
+   the brief and re-verify rather than overstating.
 
 Rules:
 - The brief file is your deliverable, not your chat reply. Return only a short
@@ -108,6 +117,7 @@ def build_research_subagent(settings: Settings | None = None) -> SubAgent:
     OpenRouter key, SearXNG URL). The Stage-B model is a live OpenRouter chat model;
     it constructs without a key (dry-run safe) and only needs one to run."""
     s = settings or get_settings()
+    data_dir = str(Path(s.orchestrator_data_dir).resolve())
     return SubAgent(
         name=RESEARCH_SUBAGENT_NAME,
         description=(
@@ -117,7 +127,7 @@ def build_research_subagent(settings: Settings | None = None) -> SubAgent:
             "search, and what is technically new; then verifies the brief. "
             "Delegate one topic per call."
         ),
-        system_prompt=_system_prompt(),
+        system_prompt=_system_prompt(data_dir),
         tools=[
             build_fetch_article_tool(s),
             build_web_search_tool(s),

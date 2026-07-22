@@ -90,3 +90,13 @@ def test_prompt_states_the_file_io_contract() -> None:
     assert "drafts/<post_id>.json" in prompt
     assert "style_profile.json" in prompt
     assert "linkedin-voice" in prompt
+
+
+def test_prompt_interpolates_absolute_data_dir_into_io_paths(tmp_path) -> None:
+    """P8.3 path-semantics fix: the draft write path + brief/style reads are
+    interpolated as ABSOLUTE paths under orchestrator_data_dir so LLM-driven
+    read_file/write_file resolve on the mounted filesystem."""
+    data_dir = str(tmp_path.resolve())
+    prompt = build_writer_subagent(_settings(orchestrator_data_dir=data_dir))["system_prompt"]
+    assert f"{data_dir}/drafts/<post_id>.json" in prompt
+    assert f"{data_dir}/briefs/<topic_id>.verified.json" in prompt

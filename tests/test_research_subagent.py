@@ -121,3 +121,13 @@ def test_prompt_states_the_file_contract_and_guardrails() -> None:
     # anti-fabrication + single-topic guardrails
     assert "never invent" in prompt or "never fabricate" in prompt
     assert "one topic" in prompt
+
+
+def test_prompt_interpolates_absolute_data_dir_into_write_paths(tmp_path) -> None:
+    """P8.3 path-semantics fix: the brief write path is interpolated as an
+    ABSOLUTE path under orchestrator_data_dir, so an LLM-driven write_file lands
+    on the mounted filesystem (a bare relative path normalizes to the read-only
+    OS root under virtual_mode=False)."""
+    data_dir = str(tmp_path.resolve())
+    prompt = build_research_subagent(_settings(orchestrator_data_dir=data_dir))["system_prompt"]
+    assert f"{data_dir}/briefs/<topic_id>.json" in prompt

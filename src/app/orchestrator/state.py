@@ -168,22 +168,16 @@ def build_orchestrator_backend(settings: Settings | None = None) -> FilesystemBa
 
     Settings resolve lazily when not supplied, mirroring the tool factories.
 
-    TODO(P5-orchestration-paths, follow-up): deepagents' built-in
-    ``write_file`` middleware calls ``validate_path``, which normalizes
-    relative paths like ``briefs/<topic>.json`` to absolute-with-leading-slash
-    (``/briefs/<topic>.json``). Under ``virtual_mode=False`` that's treated as
-    absolute-rooted at the OS root and fails on read-only filesystems. The
-    P5.3 e2e dry run uses explicit ABSOLUTE paths in scripted ``write_file``
-    calls to work around this; the P4 research/writer subagent prompts still
-    instruct the model to write relative paths (``briefs/<topic>.json``),
-    which would fail at production LLM-driven run time. A follow-up chooses
-    one of two fixes: (a) switch the mount to ``virtual_mode=True`` AND
-    symlink ``<data_dir>/skills`` -> the real skills dir so SkillsMiddleware
-    still resolves the linkedin-voice skill, OR (b) interpolate
-    ``orchestrator_data_dir`` (absolute) into the P4 subagent prompts so
-    production-time LLM-driven ``write_file`` calls emit absolute paths.
-    Either way, ship this marker greppable from the source so a future PR
-    can't silently drop the deferred scope.
+    Path semantics (resolved in P8.3): deepagents' built-in ``write_file``
+    middleware calls ``validate_path``, which normalizes a relative path like
+    ``briefs/<topic>.json`` to absolute-with-leading-slash (``/briefs/…``) —
+    which, under ``virtual_mode=False``, resolves at the OS root and fails on a
+    read-only filesystem. P8.3 took fix (b): the P4 research/writer subagent
+    prompts now interpolate ``orchestrator_data_dir`` (absolute) so LLM-driven
+    ``write_file`` / ``read_file`` calls emit absolute paths under the mount —
+    matching the explicit-absolute-path approach the P5.3 e2e dry run already
+    proved works through this backend. ``virtual_mode`` stays ``False`` so the
+    writer's absolute ``skills_source`` still resolves (see above).
     """
     s = settings or get_settings()
     root = Path(s.orchestrator_data_dir)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -11,6 +12,9 @@ from app.graph.state import AgentState
 from app.graph.workflow import build_curation_workflow, build_workflow
 from app.logging_setup import setup_logging
 from app.orchestrator.schemas import CuratedArticle
+from app.orchestrator.tools.export import build_export_report_tool
+from app.orchestrator.tracing import coordinator_run_config
+from app.orchestrator.usage import format_run_usage, track_run_usage
 from app.schemas.article import parse_articles
 
 logger = logging.getLogger(__name__)
@@ -61,6 +65,17 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--dry-run", action="store_true", help="Run without calling Telegram")
     run_parser.add_argument("--limit", type=int, default=None, help="Max articles to send (<=50)")
     run_parser.add_argument("--verbose", action="store_true", help="Enable debug logs")
+
+    propose_parser = subparsers.add_parser(
+        "propose",
+        help="Drive the coordinator deep agent to produce LinkedIn post proposals (writes a file bundle)",
+    )
+    propose_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite today's existing export bundle instead of refusing",
+    )
+    propose_parser.add_argument("--verbose", action="store_true", help="Enable debug logs")
 
     return parser
 
@@ -144,17 +159,89 @@ async def run_curation(
     return [CuratedArticle.from_article(a) for a in articles], effective_limit
 
 
+async def run_propose(args: argparse.Namespace) -> int:
+    """Drive the coordinator deep agent for one run, then export the bundle.
+
+    This is the LinkedIn-proposal cutover path (Decision H: manual CLI). Unlike
+    the news ``run``, there is no dry-run: the coordinator planner + its research
+    / writer subagents call OpenRouter, so a real key is required — the run is
+    gated on it (exit 2) rather than failing mid-flight with a 401. The run is
+    wrapped in the P7.2 usage tracker + tagged with the P7.1 trace config, and
+    ``export_report`` writes the per-run bundle the operator eyeballs (delivery
+    to Telegram is a separate layer per the coordinator's DELIVERY contract).
+
+    Exit codes: 0 success, 1 the run completed but export failed, 2 config error.
+    """
+    settings = get_settings()
+    configure_langsmith_env(settings)
+
+    if not (settings.openrouter_api_key or "").strip():
+        logger.error(
+            "Configuration error: propose requires OPENROUTER_API_KEY — the "
+            "coordinator planner and its subagents call OpenRouter."
+        )
+        print("Configuration error: missing required .env value: OPENROUTER_API_KEY")
+        return 2
+
+    run_id = str(uuid4())
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    kickoff = (
+        f"Today is {today}. Produce up to {settings.max_topics_per_run} "
+        "LinkedIn post proposals per the system prompt."
+    )
+
+    # Imported lazily to break a cycle: the coordinator pulls in the news tool,
+    # which imports run_curation back from this module. The deeper issue is a
+    # layering inversion — run_curation is domain logic living in the CLI
+    # entrypoint; the clean fix (moving it to a non-entry module so tools/news
+    # imports down, not up) belongs to the P8.4 cleanup, not this cutover PR.
+    from app.orchestrator.agent import build_coordinator_agent
+
+    agent = build_coordinator_agent(settings)
+    with track_run_usage(run_id=run_id, dry_run=False) as usage:
+        await agent.ainvoke(
+            {"messages": [{"role": "user", "content": kickoff}]},
+            coordinator_run_config(run_id=run_id, dry_run=False),
+        )
+
+    export_tool = build_export_report_tool(settings)
+    export_result = json.loads(await export_tool.ainvoke({"overwrite": bool(args.force)}))
+
+    usage_summary = format_run_usage(usage)
+    logger.info("Run usage | %s", usage_summary)
+    print(usage_summary)
+
+    if export_result.get("status") == "ok":
+        print(
+            f"Proposals exported to {export_result.get('bundle_dir')} "
+            f"| counts={export_result.get('counts')}"
+        )
+        return 0
+
+    # Don't silently clobber a paid-for prior run's bundle: refuse and tell the
+    # operator how to overwrite deliberately.
+    if export_result.get("reason") == "overwrite_required":
+        print(
+            f"Today's export bundle already exists at "
+            f"{export_result.get('bundle_dir')}; re-run with --force to overwrite it."
+        )
+    else:
+        print(f"Run complete but export failed: {export_result.get('reason')}")
+    return 1
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    if args.command != "run":
-        parser.print_help()
-        return
+    if args.command == "run":
+        setup_logging(verbose=bool(args.verbose))
+        raise SystemExit(asyncio.run(run_pipeline(args)))
+    if args.command == "propose":
+        setup_logging(verbose=bool(args.verbose))
+        raise SystemExit(asyncio.run(run_propose(args)))
 
-    setup_logging(verbose=bool(args.verbose))
-    exit_code = asyncio.run(run_pipeline(args))
-    raise SystemExit(exit_code)
+    parser.print_help()
 
 
 if __name__ == "__main__":
