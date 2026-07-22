@@ -1,0 +1,90 @@
+{
+  "quality_gate": {
+    "clean_pass": {
+      "has_hype": false,
+      "hashtags_count": 3,
+      "hype_markers": [],
+      "passed": true,
+      "reasons": [],
+      "single_topic": true,
+      "word_count": 118
+    },
+    "hype_present": {
+      "has_hype": true,
+      "hashtags_count": 3,
+      "hype_markers": [
+        "revolutionary"
+      ],
+      "passed": false,
+      "reasons": [
+        "hype language detected: revolutionary"
+      ],
+      "single_topic": true,
+      "word_count": 121
+    },
+    "multi_topic": {
+      "has_hype": false,
+      "hashtags_count": 3,
+      "hype_markers": [],
+      "passed": false,
+      "reasons": [
+        "expected exactly one supporting_topic_id, got 2"
+      ],
+      "single_topic": false,
+      "word_count": 118
+    },
+    "no_hashtags": {
+      "has_hype": false,
+      "hashtags_count": 0,
+      "hype_markers": [],
+      "passed": false,
+      "reasons": [
+        "no usable hashtags after normalization"
+      ],
+      "single_topic": true,
+      "word_count": 118
+    },
+    "too_few_hashtags": {
+      "has_hype": false,
+      "hashtags_count": 1,
+      "hype_markers": [],
+      "passed": false,
+      "reasons": [
+        "only 1 usable hashtag(s); writer should add at least 3"
+      ],
+      "single_topic": true,
+      "word_count": 118
+    },
+    "too_long": {
+      "has_hype": false,
+      "hashtags_count": 3,
+      "hype_markers": [],
+      "passed": false,
+      "reasons": [
+        "body too long: 400 words (cap 182)"
+      ],
+      "single_topic": true,
+      "word_count": 400
+    },
+    "too_short": {
+      "has_hype": false,
+      "hashtags_count": 3,
+      "hype_markers": [],
+      "passed": false,
+      "reasons": [
+        "body too short: 9 words (need at least 105)"
+      ],
+      "single_topic": true,
+      "word_count": 9
+    }
+  },
+  "technical_rank": {
+    "ranked_order": [
+      "technical",
+      "hype",
+      "funding"
+    ],
+    "technical_ranks_above_funding": true,
+    "technical_ranks_above_hype": true
+  }
+}

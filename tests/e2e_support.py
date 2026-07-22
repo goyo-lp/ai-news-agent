@@ -142,22 +142,28 @@ def stub_brief_json(topic_id: str) -> str:
     )
 
 
+# A quality-gate-passing post body: word count in [105, 182], no hype markers.
+# Shared by the e2e draft stub and the P8.2 parity fixtures so the "canonical
+# clean proposal" is tuned to the gate's word window in exactly one place.
+CLEAN_GATE_BODY = (
+    "Stable Diffusion 3.5 ships a new attention mechanism that lowers "
+    "the real cost of running image models at parity quality. The change "
+    "is a small rewrite of how the model attends across patches and "
+    "shows up as a throughput improvement in the release notes. "
+    "Independent benchmarks are limited at this stage. Teams building on "
+    "the SDK should pin their current model version and test the new path "
+    "in parallel before switching production traffic. The spend math is "
+    "straightforward: if inference was your bottleneck, this likely moves "
+    "the per-image cost down without regressing fidelity. For research "
+    "workloads the gain is minor. For production serving, this is one of "
+    "the more useful steady improvements."
+)
+
+
 def stub_draft_json(post_id: str, topic_id: str) -> str:
     """A valid PostProposal JSON that passes the quality gate: body word count in
     [105, 182]; exactly one supporting_topic_id; >=3 hashtags; no hype markers."""
-    body_words = (
-        "Stable Diffusion 3.5 ships a new attention mechanism that lowers "
-        "the real cost of running image models at parity quality. The change "
-        "is a small rewrite of how the model attends across patches and "
-        "shows up as a throughput improvement in the release notes. "
-        "Independent benchmarks are limited at this stage. Teams building on "
-        "the SDK should pin their current model version and test the new path "
-        "in parallel before switching production traffic. The spend math is "
-        "straightforward: if inference was your bottleneck, this likely moves "
-        "the per-image cost down without regressing fidelity. For research "
-        "workloads the gain is minor. For production serving, this is one of "
-        "the more useful steady improvements."
-    )
+    body_words = CLEAN_GATE_BODY
     assert 105 <= len(body_words.split()) <= 182, "draft body must be in the gate's word window"
     return json.dumps(
         {
