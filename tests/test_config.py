@@ -43,9 +43,10 @@ def test_settings_rejects_unknown_ported_knobs() -> None:
     Stage A models + max_topics_per_run (P2.1 technical_rank), Tavily knobs
     (P2.3 tavily tools), verifier knobs (P2.4 verify_claim), and the
     style-profile paths (P3.2 load_style_profile), the Stage-B research model
-    (P4.1 research-subagent), and the Stage-B writer model + skills dir (P4.2
-    writer-subagent) now have consumers; the remaining ported knobs (deep-agent
-    bounds, orchestration limits) stay deferred until their consumer PRs land."""
+    (P4.1 research-subagent), the Stage-B writer model + skills dir (P4.2
+    writer-subagent), and now outputs_dir (P6.3 export_report) have consumers;
+    the remaining ported knobs (deep-agent bounds, orchestration limits) stay
+    deferred until their consumer PRs land."""
     settings = Settings(_env_file=None)
     for removed in (
         "deep_agent_enabled",
@@ -53,7 +54,6 @@ def test_settings_rejects_unknown_ported_knobs() -> None:
         "deep_research_topic_concurrency",
         "adaptive_investigation_concurrency",
         "telegram_send_concurrency",
-        "outputs_dir",
     ):
         assert not hasattr(settings, removed), f"{removed} should not be on Settings yet"
 

@@ -159,9 +159,16 @@ class Settings(BaseSettings):
     # `FilesystemBackend` rooted here — NOT a `StateBackend`, which would
     # isolate subagent write_file payloads to LangGraph state and break the
     # cross-tool visibility contract documented in subagents/research.py and
-    # subagents/writer.py. Other dirs (`outputs_dir`, `style_profile_file`,
+    # subagents/writer.py. Other dirs (`style_profile_file`,
     # `style_samples_dir`) live with their consumer, not pre-declared.
     orchestrator_data_dir: str = "data/orchestrator"
+
+    # Run-output directory — where the export_report tool (P6.3) writes the
+    # per-run export bundle (posts.md + run_report.json + briefs.json) under
+    # ``<outputs_dir>/<YYYY-MM-DD>/``. Landed with its consumer (P6.3).
+    # Defaults to ``data/outputs`` alongside the orchestrator data dir so a
+    # fresh checkout produces a tree where both are siblings under ``data/``.
+    outputs_dir: str = "data/outputs"
 
     model_config = SettingsConfigDict(
         env_file=".env",
