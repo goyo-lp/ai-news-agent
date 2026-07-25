@@ -43,6 +43,12 @@ import httpx
 from app.config import Settings
 from app.orchestrator.services.ranking import DiscoveredItem, _TECH_KEYWORDS
 from app.orchestrator.usage import record_openrouter_http_response
+from app.services.middleware import (
+    MiddlewareChain,
+    normalize_reasoning_effort,
+    reasoning_effort_middleware,
+    strip_reasoning_middleware,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,10 +80,20 @@ class TechnicalRanker:
     Constructed with a ``Settings`` so the assessor picks up the env-driven
     Stage A model the moment one is configured. ``assess_many`` returns
     ``{item_id: TechnicalAssessment}`` keyed on the item's ``id`` — the same key
-    :func:`rank_topics` emits as ``TechnicalOverride`` keys."""
+    :func:`rank_topics` emits as ``TechnicalOverride`` keys.
+
+    Runs the same reasoning-effort + think-block-stripping middleware
+    :class:`~app.services.openrouter_client.OpenRouterClient` uses (see
+    ``services/middleware.py``) — the default Stage-A model (DeepSeek V4
+    Flash) reasons before answering, and without this a truncated think-block
+    leaves no JSON for the response parser to find."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        effort = normalize_reasoning_effort(settings.openrouter_reasoning_effort)
+        self._chain = MiddlewareChain(
+            [reasoning_effort_middleware(effort=effort), strip_reasoning_middleware]
+        )
 
     async def assess_many(
         self,
@@ -155,7 +171,11 @@ class TechnicalRanker:
         payload = {
             "model": model,
             "temperature": 0.1,
-            "max_tokens": 300,
+            # 10000 (not the tighter budget a small JSON reply would suggest)
+            # because DeepSeek V4 Flash reasons before answering at "high"
+            # effort — a tight cap truncates mid-think-block and leaves no
+            # JSON for the parser, same as OpenRouterClient's calls use.
+            "max_tokens": 10000,
             # Ask OpenRouter to include cost in the usage block so the P7.2
             # tracker records real spend, not just tokens.
             "usage": {"include": True},
@@ -180,15 +200,20 @@ class TechnicalRanker:
         if self.settings.openrouter_app_name:
             headers["X-Title"] = self.settings.openrouter_app_name
 
-        response = await client.post(
-            f"{self.settings.openrouter_base_url}/chat/completions",
-            headers=headers,
-            json=payload,
-        )
-        response.raise_for_status()
-        response_payload = response.json()
-        record_openrouter_http_response(model=model, payload=response_payload)
-        content = str(response_payload["choices"][0]["message"]["content"])
+        base_url = self.settings.openrouter_base_url
+
+        async def base_call(p: dict) -> str:
+            response = await client.post(
+                f"{base_url}/chat/completions",
+                headers=headers,
+                json=p,
+            )
+            response.raise_for_status()
+            response_payload = response.json()
+            record_openrouter_http_response(model=model, payload=response_payload)
+            return str(response_payload["choices"][0]["message"]["content"])
+
+        content = await self._chain.execute(base_call, payload)
         parsed = _parse_json_payload(content)
         return TechnicalAssessment(
             technical_depth=_clip01(float(parsed.get("technical_depth") or 0.0)),
