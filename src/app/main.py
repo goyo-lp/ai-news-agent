@@ -4,15 +4,20 @@ import argparse
 import asyncio
 import json
 import logging
+import shutil
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from app.config import Settings, configure_langsmith_env, get_settings
 from app.graph.state import AgentState
 from app.graph.workflow import build_curation_workflow, build_workflow
 from app.logging_setup import setup_logging
+from app.orchestrator import state
 from app.orchestrator.schemas import CuratedArticle
 from app.orchestrator.tools.export import build_export_report_tool
+from app.orchestrator.tools.telegram import build_deliver_telegram_tool
 from app.orchestrator.tracing import coordinator_run_config
 from app.orchestrator.usage import format_run_usage, track_run_usage
 from app.schemas.article import parse_articles
@@ -74,6 +79,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Overwrite today's existing export bundle instead of refusing",
+    )
+    propose_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Produce + export proposals but do NOT send them to the LinkedIn Telegram bot",
     )
     propose_parser.add_argument("--verbose", action="store_true", help="Enable debug logs")
 
@@ -159,18 +169,58 @@ async def run_curation(
     return [CuratedArticle.from_article(a) for a in articles], effective_limit
 
 
+def _clear_run_workspace(settings: Settings) -> None:
+    """Remove the previous run's regenerated artifacts under
+    ``orchestrator_data_dir`` so this ``propose`` run — and its delivery — only
+    ever sees its own output. ``drafts/`` is a persistent dir; without this it
+    accumulates across days and the delivery loop re-sends prior runs' proposals
+    (duplicate posts). Inputs that live outside this dir (style profile, skills,
+    delivery history) are untouched."""
+    data_dir = Path(settings.orchestrator_data_dir)
+    for filename in (state.ARTICLES_FILENAME, state.TOPICS_FILENAME):
+        (data_dir / filename).unlink(missing_ok=True)
+    for subdir in (state.BRIEFS_DIRNAME, state.DRAFTS_DIRNAME):
+        shutil.rmtree(data_dir / subdir, ignore_errors=True)
+
+
+async def _deliver_proposals(settings: Settings) -> list[dict[str, Any]]:
+    """Send every passing draft under ``drafts/`` to the LinkedIn Telegram bot
+    via the ``deliver_telegram`` tool. The tool re-verifies each draft's gate
+    verdict and refuses any it didn't certify, hard-codes ``bot="linkedin"``, and
+    auto-dry-runs when the linkedin profile is unconfigured — so this loop can
+    stay dumb: deliver every draft, let the tool gate + route. Returns one
+    compressed result dict per draft."""
+    drafts_dir = Path(settings.orchestrator_data_dir) / "drafts"
+    if not drafts_dir.exists():
+        return []
+    tool = build_deliver_telegram_tool(settings)
+    results: list[dict[str, Any]] = []
+    for draft in sorted(drafts_dir.glob("*.json")):
+        if draft.name.endswith(".gate.json"):
+            continue
+        post_id = draft.name[: -len(".json")]
+        results.append(json.loads(await tool.ainvoke({"post_id": post_id})))
+    return results
+
+
 async def run_propose(args: argparse.Namespace) -> int:
-    """Drive the coordinator deep agent for one run, then export the bundle.
+    """Drive the coordinator deep agent for one run, deliver the passing
+    proposals to the LinkedIn Telegram bot, and export the run bundle.
 
-    This is the LinkedIn-proposal cutover path (Decision H: manual CLI). Unlike
-    the news ``run``, there is no dry-run: the coordinator planner + its research
-    / writer subagents call OpenRouter, so a real key is required — the run is
-    gated on it (exit 2) rather than failing mid-flight with a 401. The run is
-    wrapped in the P7.2 usage tracker + tagged with the P7.1 trace config, and
-    ``export_report`` writes the per-run bundle the operator eyeballs (delivery
-    to Telegram is a separate layer per the coordinator's DELIVERY contract).
+    This is the LinkedIn-proposal path (Decision H: manual CLI). The coordinator
+    planner + its research / writer subagents call OpenRouter, so a real key is
+    required — the run is gated on it (exit 2) rather than failing mid-flight
+    with a 401. The run is wrapped in the P7.2 usage tracker + tagged with the
+    P7.1 trace config.
 
-    Exit codes: 0 success, 1 the run completed but export failed, 2 config error.
+    The per-run workspace is cleared first so delivery only ever sees this run's
+    drafts. ``export_report`` is the run's commit record: only when it succeeds
+    are the passing drafts sent to the ``linkedin`` bot (Decision C). A same-day
+    re-run without ``--force`` therefore refuses AND doesn't re-post; ``--dry-run``
+    skips the Telegram send (the LLM still ran and spent).
+
+    Exit codes: 0 success, 1 export refused/failed (nothing delivered),
+    2 config error.
     """
     settings = get_settings()
     configure_langsmith_env(settings)
@@ -182,6 +232,10 @@ async def run_propose(args: argparse.Namespace) -> int:
         )
         print("Configuration error: missing required .env value: OPENROUTER_API_KEY")
         return 2
+
+    # Run-scope the workspace: drafts/ is persistent, so without this a new run's
+    # delivery would re-send prior runs' proposals (duplicate posts).
+    _clear_run_workspace(settings)
 
     run_id = str(uuid4())
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -211,23 +265,41 @@ async def run_propose(args: argparse.Namespace) -> int:
     logger.info("Run usage | %s", usage_summary)
     print(usage_summary)
 
-    if export_result.get("status") == "ok":
-        print(
-            f"Proposals exported to {export_result.get('bundle_dir')} "
-            f"| counts={export_result.get('counts')}"
-        )
-        return 0
+    # Export is the run's commit record. If it refuses (a same-day bundle
+    # already exists and --force wasn't passed) or fails, do NOT deliver — that
+    # keeps a same-day re-run from re-posting proposals to the linkedin chat.
+    if export_result.get("status") != "ok":
+        if export_result.get("reason") == "overwrite_required":
+            print(
+                f"Today's proposals already exist at {export_result.get('bundle_dir')} "
+                "— not re-sending. Re-run with --force to regenerate + re-deliver."
+            )
+        else:
+            print(f"Run complete but export failed: {export_result.get('reason')} — not delivered.")
+        return 1
 
-    # Don't silently clobber a paid-for prior run's bundle: refuse and tell the
-    # operator how to overwrite deliberately.
-    if export_result.get("reason") == "overwrite_required":
-        print(
-            f"Today's export bundle already exists at "
-            f"{export_result.get('bundle_dir')}; re-run with --force to overwrite it."
-        )
+    # Committed run → deliver passing proposals to the LinkedIn bot (Decision C).
+    # Done here in the CLI, not by the coordinator, per its DELIVERY contract
+    # ("delivery is a separate layer"). --dry-run skips the send.
+    if args.dry_run:
+        print("(--dry-run: skipped LinkedIn Telegram delivery)")
     else:
-        print(f"Run complete but export failed: {export_result.get('reason')}")
-    return 1
+        delivered = await _deliver_proposals(settings)
+        sent = sum(1 for d in delivered if d.get("status") == "sent")
+        dry = sum(1 for d in delivered if d.get("status") == "dry_run")
+        print(
+            f"Delivered {sent}/{len(delivered)} proposal(s) to the linkedin bot"
+            + (f" ({dry} dry-run: linkedin profile unconfigured)" if dry else "")
+        )
+        for item in delivered:
+            if item.get("status") not in {"sent", "dry_run"}:
+                print(f"  - {item.get('post_id')}: {item.get('status')} ({item.get('reason')})")
+
+    print(
+        f"Proposals exported to {export_result.get('bundle_dir')} "
+        f"| counts={export_result.get('counts')}"
+    )
+    return 0
 
 
 def main() -> None:
