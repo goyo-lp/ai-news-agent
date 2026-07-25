@@ -5,10 +5,14 @@ import asyncio
 import json
 import logging
 import shutil
+import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+
+import httpx
 
 from app.config import Settings, configure_langsmith_env, get_settings
 from app.graph.state import AgentState
@@ -86,6 +90,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Produce + export proposals but do NOT send them to the LinkedIn Telegram bot",
     )
     propose_parser.add_argument("--verbose", action="store_true", help="Enable debug logs")
+
+    both_parser = subparsers.add_parser(
+        "both",
+        help="Run the news digest, then produce + deliver LinkedIn proposals",
+    )
+    both_parser.add_argument("--dry-run", action="store_true", help="Run without calling Telegram")
+    both_parser.add_argument("--limit", type=int, default=None, help="Max articles to send (<=50)")
+    both_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite today's existing export bundle instead of refusing",
+    )
+    both_parser.add_argument("--verbose", action="store_true", help="Enable debug logs")
 
     return parser
 
@@ -169,6 +186,48 @@ async def run_curation(
     return [CuratedArticle.from_article(a) for a in articles], effective_limit
 
 
+_SEARXNG_COMPOSE_FILE = Path(__file__).resolve().parents[2] / "docker-compose.searxng.yml"
+_SEARXNG_DEFAULT_URL = "http://localhost:8080"
+
+
+def _ensure_searxng(settings: Settings) -> None:
+    """Best-effort auto-start of the self-hosted SearXNG instance
+    (docker-compose.searxng.yml) so propose's web_search fallback does real
+    corroborating searches instead of returning mock results. Only kicks in
+    when SEARXNG_BASE_URL is unset — an operator already pointing it at their
+    own instance is left alone. Any failure here (no docker, container never
+    becomes healthy) just logs a warning; web_search's existing mock-result
+    mode is the fallback, not a hard error."""
+    if (settings.searxng_base_url or "").strip():
+        return
+
+    try:
+        subprocess.run(
+            ["docker", "compose", "-f", str(_SEARXNG_COMPOSE_FILE), "up", "-d"],
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        logger.warning("Could not start SearXNG (%s) — web_search will use mock results.", exc)
+        return
+
+    with httpx.Client(timeout=2) as client:
+        for _ in range(15):
+            try:
+                if client.get(_SEARXNG_DEFAULT_URL).status_code == 200:
+                    settings.searxng_base_url = _SEARXNG_DEFAULT_URL
+                    logger.info("SearXNG ready at %s", _SEARXNG_DEFAULT_URL)
+                    return
+            except httpx.HTTPError:
+                pass
+            time.sleep(1)
+
+    logger.warning(
+        "SearXNG container started but didn't become healthy in time — web_search will use mock results."
+    )
+
+
 def _clear_run_workspace(settings: Settings) -> None:
     """Remove the previous run's regenerated artifacts under
     ``orchestrator_data_dir`` so this ``propose`` run — and its delivery — only
@@ -232,6 +291,8 @@ async def run_propose(args: argparse.Namespace) -> int:
         )
         print("Configuration error: missing required .env value: OPENROUTER_API_KEY")
         return 2
+
+    _ensure_searxng(settings)
 
     # Run-scope the workspace: drafts/ is persistent, so without this a new run's
     # delivery would re-send prior runs' proposals (duplicate posts).
@@ -302,6 +363,19 @@ async def run_propose(args: argparse.Namespace) -> int:
     return 0
 
 
+async def run_both(args: argparse.Namespace) -> int:
+    """Run both delivery lanes back to back: the news digest to the `news` bot,
+    then the LinkedIn proposal flow to the `linkedin` bot. Each lane keeps its
+    own exit-code contract; this returns the worse of the two (0 only if both
+    succeed) so `both` fails loudly if either lane does.
+    """
+    print("=== news digest ===")
+    run_exit = await run_pipeline(args)
+    print("=== LinkedIn proposals ===")
+    propose_exit = await run_propose(args)
+    return max(run_exit, propose_exit)
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -312,6 +386,9 @@ def main() -> None:
     if args.command == "propose":
         setup_logging(verbose=bool(args.verbose))
         raise SystemExit(asyncio.run(run_propose(args)))
+    if args.command == "both":
+        setup_logging(verbose=bool(args.verbose))
+        raise SystemExit(asyncio.run(run_both(args)))
 
     parser.print_help()
 

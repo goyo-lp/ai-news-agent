@@ -83,11 +83,7 @@ Each Telegram message is:
 The orchestrator's research tools use only keyless/self-hosted evidence sources — no Tavily, no API keys, LLM cost aside:
 
 - **`web_extract`** — fetches article text locally through the SSRF-guarded, size-capped HTTP path and extracts it with [trafilatura](https://trafilatura.readthedocs.io/). Always available; no service required.
-- **`web_search`** — queries a self-hosted [SearXNG](https://docs.searxng.org/) instance (keyless). Start one with:
-  ```bash
-  docker compose -f docker-compose.searxng.yml up -d
-  ```
-  then set `SEARXNG_BASE_URL=http://localhost:8080` in `.env`. The JSON API the tool uses is enabled in `searxng/settings.yml` (SearXNG ships with JSON off by default). Leave `SEARXNG_BASE_URL` empty to run without an instance — `web_search` then returns deterministic dry-run mock results.
+- **`web_search`** — queries a self-hosted [SearXNG](https://docs.searxng.org/) instance (keyless). `propose` auto-starts it for you: if `SEARXNG_BASE_URL` is unset, it runs `docker compose -f docker-compose.searxng.yml up -d`, waits for the container to answer, and points `web_search` at `http://localhost:8080` for that run — no manual setup needed as long as Docker is installed. If Docker isn't available or the container never becomes healthy, it logs a warning and `web_search` falls back to deterministic dry-run mock results instead of failing the run. To use your own instance instead, set `SEARXNG_BASE_URL` in `.env` yourself and the auto-start is skipped. The JSON API the tool uses is enabled in `searxng/settings.yml` (SearXNG ships with JSON off by default).
 
 Independent corroboration leans first on the RSS pipeline's clustered `supporting_urls` (sources it already found), with SearXNG as the fallback when the cluster is thin.
 
@@ -192,6 +188,19 @@ if those are unset the send is skipped (dry-run). The rendered `posts.md` and a
 Two delivery lanes, two commands: `run` sends the daily **news digest** to the
 news bot; `propose` sends **LinkedIn post proposals** to the linkedin bot. The
 news digest `run` path is unchanged.
+
+## Both (news digest + LinkedIn proposals in one command)
+
+Run both lanes back to back — `run` then `propose` — each delivering to its
+own Telegram bot:
+
+```bash
+uv run ai-news-agent both
+```
+
+Accepts the union of both lanes' flags: `--dry-run`, `--limit`, `--force`,
+`--verbose`. Exit code is the worse of the two (0 only if both lanes succeed);
+each lane still runs even if the other failed.
 
 ## Troubleshooting
 

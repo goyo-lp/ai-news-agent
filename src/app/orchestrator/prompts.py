@@ -79,15 +79,26 @@ def _pipeline_section(max_topics_per_run: int) -> str:
    tool returns a JSON summary with `{count, limit_used, path}` — NOT
    the articles. The article list lives at `path` (`articles.json` under
    the orchestrator data dir); you do not need to read it.
-3. **Rank.** Call `technical_rank` once. It writes `topics.json` under
-   the data dir; the tool returns a summary with
-   `{count, limit_used, path}` — NOT the topic list.
-4. **Read the topics file.** Call `read_file(file_path="topics.json")`
-   ONCE — this is the *only time* the structured payload enters your
-   context, and it's the smallest possible form (one row per topic with
-   `topic_id`, `title`, `summary_hint`, `primary_url`,
-   `supporting_urls`). From here on, work topic-by-topic.
-5. **Research, one topic at a time.** For each topic, call
+3. **Rank.** Call `technical_rank` once. It writes EVERY viable ranked
+   topic to `topics.json` under the data dir — one row per story
+   cluster, not pre-cut to `max_topics_per_run`; the tool returns a
+   summary with `{count, limit_used, path}` — NOT the topic list.
+4. **Read the topics file and select.** Call
+   `read_file(file_path="topics.json")` ONCE — this is the *only time*
+   the structured payload enters your context, and it's the smallest
+   possible form (one row per topic with `topic_id`, `title`,
+   `summary_hint`, `primary_url`, `primary_domain`, `score`,
+   `supporting_urls`). From this candidate list, select up to
+   `max_topics_per_run` topics to actually research and write. This
+   selection is yours to reason about — do not just take the top-N by
+   `score`. Weigh score against **source diversity**: look at each
+   candidate's `primary_domain` and avoid letting one domain dominate
+   the selection (e.g. three GitHub repo listings) when other
+   well-ranked topics from distinct domains are available lower in the
+   list. There is no fixed per-domain quota — use judgment on the
+   actual candidates in front of you. From here on, work topic-by-topic
+   over your selected set.
+5. **Research, one topic at a time.** For each selected topic, call
    `task(subagent_type="research-subagent", description="...",
    prompt="<topic_id> + one-line summary + primary_url>")`. Run the N
    research tasks concurrently when the SDK allows it — each task call
@@ -110,8 +121,9 @@ def _pipeline_section(max_topics_per_run: int) -> str:
    there.
 
 Do not exceed `max_topics_per_run` (""" + str(max_topics_per_run) + """) topics. The
-technical_rank tool clamps the topics file to this cap already; the
-cap is repeated here so you don't try to fan out beyond it."""
+topics.json file is NOT pre-clamped to this cap — it holds every viable
+candidate. Selecting down to the cap, with source diversity in mind, is
+your job at step 4, not technical_rank's."""
 # noqa: E501  (long literal prompt text — readability trumps line length)
 
 
@@ -160,7 +172,10 @@ def _guardrails_section() -> str:
   and the delivery layer has no fact-check of its own.
 - **Cap. Never exceed `max_topics_per_run` topics across the whole run.
   The cap is the contract floor — fewer is fine if the ranker filtered
-  to fewer; more is not.
+  to fewer; more is not. You enforce this cap yourself at step 4 by
+  choosing which candidates to delegate — don't just take the top-N
+  by score if that means shipping the same source domain three times
+  over.
 - **Don't author prose.** Your job is plan + delegate + surface. If you
   catch yourself writing a LinkedIn post in your chat reply, stop — the
   writer subagent owns prose. You reading the draft at the end is for

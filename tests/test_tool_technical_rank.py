@@ -23,6 +23,23 @@ def _curated(article_id: str, title: str, *, summary: str = "benchmark inference
     )
 
 
+# Ten titles with essentially no shared vocabulary, so `_same_story`
+# clustering keeps them as ten separate story clusters (a shared numeric
+# suffix like "... inference {i}" clusters them into one story instead).
+_DISTINCT_TITLES = [
+    "Benchmark architecture inference training",
+    "Kernel scheduler memory allocator patch",
+    "Distributed training pipeline throughput",
+    "Vector database retrieval index optimization",
+    "Reinforcement learning policy gradient update",
+    "Transformer attention mechanism optimization work",
+    "Compiler backend code generation improvements",
+    "Networking protocol latency reduction study",
+    "Storage engine compaction algorithm redesign",
+    "Container orchestration scheduler enhancement release",
+]
+
+
 def _settings(tmp_path: Path) -> Settings:
     # No OPENROUTER_API_KEY -> heuristic path -> deterministic.
     return Settings(
@@ -74,7 +91,10 @@ async def test_tool_reads_articles_writes_topics_and_returns_summary(tmp_path: P
 
     assert set(result) == {"count", "limit_used", "path"}
     assert result["count"] == 2
-    assert result["limit_used"] == 5
+    # No limit was requested, so the cap is however many articles were
+    # available (2) — NOT settings.max_topics_per_run (5). technical_rank
+    # writes every viable topic; the coordinator does the down-selection.
+    assert result["limit_used"] == 2
     assert result["path"].endswith("topics.json")
     topics_path = Path(result["path"])
     assert topics_path.parent == Path(settings.orchestrator_data_dir)
@@ -86,16 +106,35 @@ async def test_tool_reads_articles_writes_topics_and_returns_summary(tmp_path: P
     assert on_disk[0]["score"] > on_disk[1]["score"]
 
 
-async def test_tool_clamps_limit_to_settings_max(tmp_path: Path) -> None:
+async def test_tool_does_not_clamp_to_settings_max_topics_per_run(tmp_path: Path) -> None:
+    """technical_rank writes every viable topic regardless of
+    max_topics_per_run — that cap is enforced by the coordinator's own
+    selection when it reads topics.json (P: source-diversity reasoning), not
+    by this tool. Ten distinct-domain articles with a max_topics_per_run=3
+    settings value should still all make it to topics.json."""
     settings = Settings(_env_file=None, orchestrator_data_dir=str(tmp_path), max_topics_per_run=3)
-    articles = [_curated(f"a{i}", f"Benchmark architecture inference {i}", url=f"https://x{i}.example.com/") for i in range(10)]
+    articles = [_curated(f"a{i}", title, url=f"https://x{i}.example.com/") for i, title in enumerate(_DISTINCT_TITLES)]
     write_articles_to_state(articles, settings.orchestrator_data_dir)
 
     tool = build_technical_rank_tool(settings)
-    result = json.loads(await tool.ainvoke({"limit": 10_000}))
+    result = json.loads(await tool.ainvoke({}))
 
-    assert result["count"] <= 3
-    assert result["limit_used"] == 3
+    assert result["count"] == 10
+    assert result["limit_used"] == 10
+
+
+async def test_tool_honors_explicit_smaller_limit(tmp_path: Path) -> None:
+    """An explicit `limit` is still honored as an escape hatch, independent of
+    max_topics_per_run."""
+    settings = Settings(_env_file=None, orchestrator_data_dir=str(tmp_path), max_topics_per_run=3)
+    articles = [_curated(f"a{i}", title, url=f"https://x{i}.example.com/") for i, title in enumerate(_DISTINCT_TITLES)]
+    write_articles_to_state(articles, settings.orchestrator_data_dir)
+
+    tool = build_technical_rank_tool(settings)
+    result = json.loads(await tool.ainvoke({"limit": 2}))
+
+    assert result["count"] == 2
+    assert result["limit_used"] == 2
 
 
 async def test_tool_summary_omits_topic_payload(tmp_path: Path) -> None:

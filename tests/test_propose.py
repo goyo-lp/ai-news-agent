@@ -64,6 +64,7 @@ def _wire_scripted_propose(
 ) -> None:
     """Point `propose` at the tmp settings + a scripted coordinator (no network)."""
     monkeypatch.setattr(main, "get_settings", lambda: settings)
+    monkeypatch.setattr(main, "_ensure_searxng", lambda settings: None)
     mock_run_curation_one_article(fixture_article("topic-a"), monkeypatch)
 
     def _fake_build(s: Settings) -> object:

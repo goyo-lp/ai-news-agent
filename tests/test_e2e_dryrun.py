@@ -193,6 +193,23 @@ def test_prompt_states_max_topics_guardrail_in_pipeline_and_guardrails() -> None
     assert "max_topics_per_run" in guardrails_segment  # named in the GUARDRAILS section
 
 
+def test_prompt_delegates_source_diversity_selection_to_the_model() -> None:
+    """technical_rank no longer pre-clamps topics.json to max_topics_per_run —
+    it writes every viable candidate. The prompt has to say, explicitly, that
+    the coordinator itself picks the final set from that candidate list and
+    must weigh source diversity (primary_domain) rather than just taking the
+    top-N by score — otherwise a single dominant source (e.g. GitHub
+    Trending) can sweep most of the run's topics. Pinned inside the PIPELINE
+    section, where step 4 (read + select) lives."""
+    prompt = build_coordinator_system_prompt(Settings(_env_file=None, max_topics_per_run=5))
+    start = prompt.find("## PIPELINE")
+    end = prompt.find("## ", start + 1)
+    pipeline_segment = prompt[start:end]
+    assert "primary_domain" in pipeline_segment
+    assert "diversity" in pipeline_segment.lower()
+    assert "select" in pipeline_segment.lower()
+
+
 def test_module_level_singleton_matches_default_settings() -> None:
     """The module-level singleton ``COORDINATOR_SYSTEM_PROMPT`` is the
     build-from-default-settings. Pin so a future lazy-init with side effects

@@ -3,9 +3,15 @@
 Reads the curated-articles file produced by :mod:`app.orchestrator.tools.news`
 (``articles.json``), re-clusters the articles, scores each cluster for
 technical implementation value (with optional Stage-A LLM assessment), and
-writes the top-N ranked topics to ``topics.json`` in the orchestrator data dir.
-Per the plan's guiding principle #3, the structured topics live on disk; the
-tool returns only a compressed summary (count + path), never the topics.
+writes every viable ranked topic to ``topics.json`` in the orchestrator data
+dir — one row per story cluster, not pre-cut to ``MAX_TOPICS_PER_RUN``. The
+coordinator (an LLM) reads that full candidate list once and selects up to
+``max_topics_per_run`` of them to actually research and write, weighing each
+topic's rank score against source diversity (``primary_domain``) itself — a
+deterministic per-source cap here can't tell "3 GitHub repos" apart from "3
+distinct frontier-lab announcements"; the model reading the list can. Per the
+plan's guiding principle #3, the structured topics live on disk; the tool
+returns only a compressed summary (count + path), never the topics.
 
 The LLM Stage-A path is optional and runs only when ``OPENROUTER_API_KEY`` is
 configured and ``dry_run`` is false; otherwise the heuristic fallback produces
@@ -40,15 +46,18 @@ _TOPICS_FILENAME = "topics.json"
 
 
 class TechnicalRankArgs(BaseModel):
-    """Tool input. ``limit`` caps how many ranked topics are written; clamped to
-    ``MAX_TOPICS_PER_RUN`` so a model can't bypass the configured ceiling
-    (parity with the news tool's ``limit`` clamping)."""
+    """Tool input. ``limit`` optionally caps how many ranked topics are
+    written; omit it to write every viable topic (one per story cluster) so
+    the coordinator has a real candidate pool to choose from — the
+    ``MAX_TOPICS_PER_RUN`` ceiling applies to the coordinator's *selection*
+    for delegation, not to what this tool writes."""
 
     limit: int | None = Field(
         default=None,
         description=(
             "Optional cap on the number of ranked topics written to topics.json. "
-            "Clamped to MAX_TOPICS_PER_RUN. Omit to use the configured default."
+            "Omit to write every viable topic (one per story cluster); "
+            "MAX_TOPICS_PER_RUN is not applied here, only at delegation time."
         ),
     )
 
@@ -92,7 +101,10 @@ async def _rank_and_write(limit: int | None, settings: Settings) -> dict[str, An
     the ranked topics. Returns the compressed summary that rides back to the
     LLM — the article/topic payloads stay on the filesystem."""
     articles = _read_articles_from_state(settings.orchestrator_data_dir)
-    cap = settings.max_topics_per_run
+    # No ceiling here beyond what's actually available — MAX_TOPICS_PER_RUN is
+    # the coordinator's delegation cap, applied when it reads this file and
+    # selects which topics to research, not a limit on what gets written.
+    cap = len(articles)
     limit_used = _clamp(limit, cap)
 
     policy = SourcePolicy.permissive()
@@ -147,10 +159,14 @@ def build_technical_rank_tool(settings: Settings | None = None) -> StructuredToo
             "fetch_curated_ai_news), re-cluster the articles, score each cluster "
             "for technical implementation value (optional Stage-A LLM assessment, "
             "heuristic fallback), demote hype- and business-only stories, and "
-            "write the top-N ranked topics to topics.json. Returns a JSON summary "
+            "write every viable ranked topic to topics.json (one per story "
+            "cluster — NOT pre-cut to MAX_TOPICS_PER_RUN). Returns a JSON summary "
             "with the topic count and the file path — it does NOT return the "
-            "topics themselves. Call this after fetch_curated_ai_news. Optional "
-            "`limit` caps the topics written and is clamped to MAX_TOPICS_PER_RUN."
+            "topics themselves. Call this after fetch_curated_ai_news. When you "
+            "read topics.json, select up to MAX_TOPICS_PER_RUN of the candidates "
+            "yourself, weighing rank score against source diversity (each row's "
+            "primary_domain) — that selection is your job, not this tool's. "
+            "Optional `limit` caps the topics written if you want fewer."
         ),
         args_schema=TechnicalRankArgs,
     )
