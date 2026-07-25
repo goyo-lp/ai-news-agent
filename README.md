@@ -176,13 +176,22 @@ post proposals, then write a per-run export bundle:
 uv run ai-news-agent propose
 ```
 
-Unlike `run`, `propose` has no `--dry-run`: the coordinator planner and its
-research/writer subagents call OpenRouter, so `OPENROUTER_API_KEY` is required
-(the command exits with a config error otherwise). The run is traced (LangSmith,
-if configured) and its OpenRouter usage/cost is logged at the end. Passing
-drafts and the rendered `posts.md` land under `<OUTPUTS_DIR>/<YYYY-MM-DD>/` for
-you to review and post manually — Telegram delivery of proposals is a separate
-layer, not part of `propose`. The news digest `run` path is unchanged.
+The coordinator planner and its research/writer subagents call OpenRouter, so
+`OPENROUTER_API_KEY` is required (the command exits with a config error
+otherwise). The run is traced (LangSmith, if configured) and its OpenRouter
+usage/cost is logged at the end.
+
+Each proposal that passes the quality gate is then **sent to the LinkedIn
+Telegram bot** (`TELEGRAM_LINKEDIN_BOT_TOKEN` + `TELEGRAM_LINKEDIN_CHAT_ID`);
+if those are unset the send is skipped (dry-run). The rendered `posts.md` and a
+`run_report.json` also land under `<OUTPUTS_DIR>/<YYYY-MM-DD>/`. Flags:
+
+- `--dry-run` — produce + export proposals but do **not** send them to Telegram.
+- `--force` — overwrite today's existing export bundle instead of refusing.
+
+Two delivery lanes, two commands: `run` sends the daily **news digest** to the
+news bot; `propose` sends **LinkedIn post proposals** to the linkedin bot. The
+news digest `run` path is unchanged.
 
 ## Troubleshooting
 

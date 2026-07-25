@@ -79,7 +79,7 @@ def test_propose_drives_agent_and_exports_bundle(
     settings = _settings(tmp_path)
     _wire_scripted_propose(tmp_path, monkeypatch, settings, _full_run_script(tmp_path))
 
-    exit_code = asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False)))
+    exit_code = asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=False)))
 
     assert exit_code == 0
     # The coordinator produced a passing draft + gate verdict on disk.
@@ -108,7 +108,7 @@ def test_propose_requires_openrouter_key(
 
     monkeypatch.setattr(agent_module, "build_coordinator_agent", _must_not_build)
 
-    exit_code = asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False)))
+    exit_code = asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=False)))
 
     assert exit_code == 2
     assert "OPENROUTER_API_KEY" in capsys.readouterr().out
@@ -125,15 +125,75 @@ def test_propose_refuses_to_clobber_same_day_bundle_without_force(
 
     # First run succeeds and writes today's bundle.
     _wire_scripted_propose(tmp_path, monkeypatch, settings, _full_run_script(tmp_path))
-    assert asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False))) == 0
+    assert asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=False))) == 0
     capsys.readouterr()  # drain
 
     # Second run, no --force: export refuses -> exit 1 with the --force hint.
     _wire_scripted_propose(tmp_path, monkeypatch, settings, _full_run_script(tmp_path))
-    assert asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False))) == 1
+    assert asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=False))) == 1
     assert "--force" in capsys.readouterr().out
 
     # Third run, --force: overwrites deliberately -> exit 0.
     _wire_scripted_propose(tmp_path, monkeypatch, settings, _full_run_script(tmp_path))
-    assert asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=True))) == 0
+    assert asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=True, dry_run=False))) == 0
     assert "Proposals exported to" in capsys.readouterr().out
+
+
+def test_propose_delivers_passing_draft_to_linkedin_bot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With the linkedin profile configured, propose sends each passing draft to
+    the linkedin bot (Decision C) via the deliver_telegram tool."""
+    settings = _settings(
+        tmp_path,
+        telegram_linkedin_bot_token="ln-token",
+        telegram_linkedin_chat_id="123456",
+    )
+    _wire_scripted_propose(tmp_path, monkeypatch, settings, _full_run_script(tmp_path))
+
+    sends: list[dict[str, object]] = []
+
+    async def _fake_send(self, text, *, bot="news", dry_run=False, disable_web_page_preview=True):  # type: ignore[no-untyped-def]
+        sends.append({"bot": bot, "dry_run": dry_run, "chars": len(text)})
+        return {"status": "sent", "message_id": 42}
+
+    monkeypatch.setattr(
+        "app.services.telegram_client.TelegramClient.send_message", _fake_send
+    )
+
+    exit_code = asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=False)))
+
+    assert exit_code == 0
+    assert len(sends) == 1
+    assert sends[0]["bot"] == "linkedin"
+    assert sends[0]["dry_run"] is False  # real send, creds present
+    assert "Delivered 1/1 proposal(s) to the linkedin bot" in capsys.readouterr().out
+
+
+def test_propose_dry_run_skips_telegram_delivery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--dry-run produces + exports proposals but never calls Telegram, even
+    when the linkedin profile is configured."""
+    settings = _settings(
+        tmp_path,
+        telegram_linkedin_bot_token="ln-token",
+        telegram_linkedin_chat_id="123456",
+    )
+    _wire_scripted_propose(tmp_path, monkeypatch, settings, _full_run_script(tmp_path))
+
+    calls: list[int] = []
+
+    async def _fake_send(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(1)
+        return {"status": "sent", "message_id": 1}
+
+    monkeypatch.setattr(
+        "app.services.telegram_client.TelegramClient.send_message", _fake_send
+    )
+
+    exit_code = asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=True)))
+
+    assert exit_code == 0
+    assert calls == []  # no Telegram send
+    assert "skipped LinkedIn Telegram delivery" in capsys.readouterr().out

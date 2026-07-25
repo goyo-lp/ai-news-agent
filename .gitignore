@@ -34,6 +34,9 @@ graphify-out/
 *.log
 telegram-resized-image.png
 data/delivery-history.json
+# Per-run orchestrator artifacts + export bundles (regenerated each run)
+data/orchestrator/
+data/outputs/
 
 # Local architecture diagrams (not tracked)
 architecture/

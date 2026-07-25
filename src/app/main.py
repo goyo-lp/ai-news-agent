@@ -5,6 +5,8 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from app.config import Settings, configure_langsmith_env, get_settings
@@ -13,6 +15,7 @@ from app.graph.workflow import build_curation_workflow, build_workflow
 from app.logging_setup import setup_logging
 from app.orchestrator.schemas import CuratedArticle
 from app.orchestrator.tools.export import build_export_report_tool
+from app.orchestrator.tools.telegram import build_deliver_telegram_tool
 from app.orchestrator.tracing import coordinator_run_config
 from app.orchestrator.usage import format_run_usage, track_run_usage
 from app.schemas.article import parse_articles
@@ -74,6 +77,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Overwrite today's existing export bundle instead of refusing",
+    )
+    propose_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Produce + export proposals but do NOT send them to the LinkedIn Telegram bot",
     )
     propose_parser.add_argument("--verbose", action="store_true", help="Enable debug logs")
 
@@ -159,16 +167,37 @@ async def run_curation(
     return [CuratedArticle.from_article(a) for a in articles], effective_limit
 
 
-async def run_propose(args: argparse.Namespace) -> int:
-    """Drive the coordinator deep agent for one run, then export the bundle.
+async def _deliver_proposals(settings: Settings) -> list[dict[str, Any]]:
+    """Send every passing draft under ``drafts/`` to the LinkedIn Telegram bot
+    via the ``deliver_telegram`` tool. The tool re-verifies each draft's gate
+    verdict and refuses any it didn't certify, hard-codes ``bot="linkedin"``, and
+    auto-dry-runs when the linkedin profile is unconfigured — so this loop can
+    stay dumb: deliver every draft, let the tool gate + route. Returns one
+    compressed result dict per draft."""
+    drafts_dir = Path(settings.orchestrator_data_dir) / "drafts"
+    if not drafts_dir.exists():
+        return []
+    tool = build_deliver_telegram_tool(settings)
+    results: list[dict[str, Any]] = []
+    for draft in sorted(drafts_dir.glob("*.json")):
+        if draft.name.endswith(".gate.json"):
+            continue
+        post_id = draft.name[: -len(".json")]
+        results.append(json.loads(await tool.ainvoke({"post_id": post_id})))
+    return results
 
-    This is the LinkedIn-proposal cutover path (Decision H: manual CLI). Unlike
-    the news ``run``, there is no dry-run: the coordinator planner + its research
-    / writer subagents call OpenRouter, so a real key is required — the run is
-    gated on it (exit 2) rather than failing mid-flight with a 401. The run is
-    wrapped in the P7.2 usage tracker + tagged with the P7.1 trace config, and
-    ``export_report`` writes the per-run bundle the operator eyeballs (delivery
-    to Telegram is a separate layer per the coordinator's DELIVERY contract).
+
+async def run_propose(args: argparse.Namespace) -> int:
+    """Drive the coordinator deep agent for one run, deliver the passing
+    proposals to the LinkedIn Telegram bot, and export the run bundle.
+
+    This is the LinkedIn-proposal path (Decision H: manual CLI). The coordinator
+    planner + its research / writer subagents call OpenRouter, so a real key is
+    required — the run is gated on it (exit 2) rather than failing mid-flight
+    with a 401. The run is wrapped in the P7.2 usage tracker + tagged with the
+    P7.1 trace config. Passing drafts are then sent to the ``linkedin`` bot
+    (Decision C); ``--dry-run`` skips the Telegram send (the LLM still ran and
+    spent). ``export_report`` writes the per-run bundle the operator keeps.
 
     Exit codes: 0 success, 1 the run completed but export failed, 2 config error.
     """
@@ -210,6 +239,23 @@ async def run_propose(args: argparse.Namespace) -> int:
     usage_summary = format_run_usage(usage)
     logger.info("Run usage | %s", usage_summary)
     print(usage_summary)
+
+    # Deliver passing proposals to the LinkedIn Telegram bot (Decision C). Done
+    # here in the CLI, not by the coordinator, per its DELIVERY contract
+    # ("delivery is a separate layer"). --dry-run skips the send.
+    if args.dry_run:
+        print("(--dry-run: skipped LinkedIn Telegram delivery)")
+    else:
+        delivered = await _deliver_proposals(settings)
+        sent = sum(1 for d in delivered if d.get("status") == "sent")
+        dry = sum(1 for d in delivered if d.get("status") == "dry_run")
+        print(
+            f"Delivered {sent}/{len(delivered)} proposal(s) to the linkedin bot"
+            + (f" ({dry} dry-run: linkedin profile unconfigured)" if dry else "")
+        )
+        for item in delivered:
+            if item.get("status") not in {"sent", "dry_run"}:
+                print(f"  - {item.get('post_id')}: {item.get('status')} ({item.get('reason')})")
 
     if export_result.get("status") == "ok":
         print(
