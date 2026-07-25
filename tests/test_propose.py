@@ -123,16 +123,20 @@ def test_propose_refuses_to_clobber_same_day_bundle_without_force(
     use --force. `--force` then overwrites deliberately. Exercises the real
     export guard, not a stub."""
     settings = _settings(tmp_path)
+    sends = _capture_sends(monkeypatch)
 
     # First run succeeds and writes today's bundle.
     _wire_scripted_propose(tmp_path, monkeypatch, settings, _full_run_script(tmp_path))
     assert asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=False))) == 0
     capsys.readouterr()  # drain
+    after_first_run = len(sends)
 
-    # Second run, no --force: export refuses -> exit 1 with the --force hint.
+    # Second run, no --force: export refuses -> exit 1 with the --force hint, and
+    # delivery is unreachable, so the refused run posts nothing.
     _wire_scripted_propose(tmp_path, monkeypatch, settings, _full_run_script(tmp_path))
     assert asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=False))) == 1
     assert "--force" in capsys.readouterr().out
+    assert len(sends) == after_first_run  # refused run sent nothing
 
     # Third run, --force: overwrites deliberately -> exit 0.
     _wire_scripted_propose(tmp_path, monkeypatch, settings, _full_run_script(tmp_path))
