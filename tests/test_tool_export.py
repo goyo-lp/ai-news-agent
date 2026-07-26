@@ -27,10 +27,9 @@ import pytest
 
 from app.config import Settings
 from app.orchestrator.schemas import PostProposal, ResearchBrief, TopicCandidate
+from app.orchestrator.services.drafts import Certification, LoadedDraft
 from app.orchestrator.services.export_bundle import (
     _DATE_SLUG_RE,
-    DraftIntegrity,
-    LoadedDraft,
     RunArtifacts,
     format_posts_md,
     normalize_date_slug,
@@ -47,11 +46,18 @@ def _artifacts(*drafts: LoadedDraft, briefs: list[ResearchBrief] | None = None) 
 
 def _loaded(proposal: PostProposal, gate: dict[str, Any] | None) -> LoadedDraft:
     return LoadedDraft(
-        proposal=proposal, gate_verdict=gate, raw=proposal.model_dump(mode="json")
+        proposal=proposal,
+        raw=proposal.model_dump(mode="json"),
+        gate_verdict=gate,
+        gate_status="present" if gate is not None else "missing",
     )
 
 
-_OK_MARKS = {"post-1": DraftIntegrity(provenance_ok=True, floor_ok=True)}
+_OK_MARKS = {
+    "post-1": Certification(
+        provenance_ok=True, gate_status="present", gate_passed=True, floor_ok=True
+    )
+}
 
 
 def _settings(tmp_path: Path, **overrides: Any) -> Settings:

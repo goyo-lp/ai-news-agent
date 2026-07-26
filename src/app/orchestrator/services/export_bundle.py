@@ -32,9 +32,13 @@ from typing import Any
 
 from app.config import Settings
 from app.orchestrator import state
-from app.orchestrator.schemas import PostProposal, ResearchBrief, TopicCandidate
-from app.orchestrator.services.evidence_floor import meets_evidence_floor
-from app.orchestrator.services.provenance import verify_draft
+from app.orchestrator.schemas import ResearchBrief, TopicCandidate
+from app.orchestrator.services.drafts import (
+    Certification,
+    LoadedDraft,
+    certify,
+    load_drafts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,46 +49,6 @@ BRIEFS_EXPORT_FILENAME = "briefs.json"
 # Strict date-slug regex; the only accepted path-component shape. A model
 # supplying a free-form date (``"../../etc/passwd"``) does not pass it.
 _DATE_SLUG_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-
-@dataclass(frozen=True)
-class LoadedDraft:
-    """One draft as the export sees it.
-
-    ``raw`` is kept alongside the validated ``proposal`` because provenance is
-    signed over the on-disk dict and ``PostProposal`` drops the ``_provenance``
-    block on validate — verifying the signature needs the original bytes'
-    structure, not the model.
-    """
-
-    proposal: PostProposal
-    gate_verdict: dict[str, Any] | None
-    raw: dict[str, Any]
-
-    @property
-    def post_id(self) -> str:
-        return self.proposal.post_id
-
-    @property
-    def gate_passed(self) -> bool | None:
-        """Strict identity check: exactly ``True`` / ``False``; anything else
-        (a model-written ``"true"`` string, a ``1``) reads as unknown rather
-        than being echoed into the report as if it were a verdict."""
-        if self.gate_verdict is None:
-            return None
-        passed = self.gate_verdict.get("passed")
-        return passed if passed is True or passed is False else None
-
-
-@dataclass(frozen=True)
-class DraftIntegrity:
-    """Reporting-only view of a draft's trustworthiness. The spine,
-    submit_draft and deliver_telegram all enforce these upstream; the report
-    surfaces the rates as first-class metrics."""
-
-    provenance_ok: bool
-    floor_ok: bool
-    floor_reason: str = ""
 
 
 @dataclass
@@ -136,44 +100,6 @@ def _load_topics(data_dir: Path) -> list[TopicCandidate]:
         return []
 
 
-def _load_drafts(data_dir: Path) -> list[LoadedDraft]:
-    """Load every draft under ``drafts/`` with its gate verdict.
-
-    Walks the drafts subdir rather than reading from the topics file — a draft
-    may exist without a topic entry (a manual backfill), and a topic may exist
-    without a draft (research failed, or the writer was gated out). The two are
-    independent in the bundle.
-    """
-    drafts_dir = data_dir / state.DRAFTS_DIRNAME
-    if not drafts_dir.exists():
-        return []
-
-    loaded: list[LoadedDraft] = []
-    for draft_file in sorted(drafts_dir.glob("*.json")):
-        # Skip gate verdict files — they're loaded alongside their draft.
-        if draft_file.name.endswith(".gate.json"):
-            continue
-        try:
-            raw = json.loads(draft_file.read_text(encoding="utf-8"))
-            proposal = PostProposal.model_validate(raw)
-        except Exception as exc:
-            logger.warning("Malformed draft at %s: %s", draft_file, exc)
-            continue
-        if not isinstance(raw, dict):
-            logger.warning("Non-object draft at %s", draft_file)
-            continue
-        gate_file = state.gate_path(proposal.post_id, data_dir)
-        gate_raw = _read_json_or_none(gate_file) if gate_file.exists() else None
-        loaded.append(
-            LoadedDraft(
-                proposal=proposal,
-                gate_verdict=gate_raw if isinstance(gate_raw, dict) else None,
-                raw=raw,
-            )
-        )
-    return loaded
-
-
 def _load_briefs(data_dir: Path, topics: list[TopicCandidate]) -> list[ResearchBrief]:
     """Load the brief behind each topic, verified copy preferred. Iterates the
     topics list so the bundle's brief ordering matches the run's ranked order."""
@@ -196,35 +122,26 @@ def load_run_artifacts(data_dir: Path) -> RunArtifacts:
     topics = _load_topics(data_dir)
     return RunArtifacts(
         topics=topics,
-        drafts=_load_drafts(data_dir),
+        drafts=load_drafts(data_dir),
         briefs=_load_briefs(data_dir, topics),
     )
 
 
 def draft_integrity(
     artifacts: RunArtifacts, settings: Settings
-) -> dict[str, DraftIntegrity]:
-    """Per-draft provenance + evidence-floor state, keyed by post_id."""
-    briefs_by_topic = {b.topic_id: b for b in artifacts.briefs}
-    integrity: dict[str, DraftIntegrity] = {}
-    for draft in artifacts.drafts:
-        floor_ok, floor_reason = False, "no supporting topic"
-        if draft.proposal.supporting_topic_ids:
-            brief = briefs_by_topic.get(draft.proposal.supporting_topic_ids[0])
-            if brief is None:
-                floor_ok, floor_reason = False, "brief missing"
-            else:
-                floor_ok, floor_reason = meets_evidence_floor(brief, settings)
-        integrity[draft.post_id] = DraftIntegrity(
-            provenance_ok=verify_draft(draft.raw, settings),
-            floor_ok=floor_ok,
-            floor_reason="" if floor_ok else floor_reason,
-        )
-    return integrity
+) -> dict[str, Certification]:
+    """Per-draft trustworthiness, keyed by post_id.
+
+    Reporting only — the spine, submit_draft and deliver_telegram all enforce
+    these upstream; the report surfaces the rates as first-class metrics. It
+    uses the same :func:`certify` delivery does, so the report cannot claim a
+    draft is below floor while delivery ships it.
+    """
+    return {draft.post_id: certify(draft, settings) for draft in artifacts.drafts}
 
 
 def format_posts_md(
-    artifacts: RunArtifacts, date_slug: str, integrity: dict[str, DraftIntegrity]
+    artifacts: RunArtifacts, date_slug: str, integrity: dict[str, Certification]
 ) -> str:
     """Render the day's posts as Markdown: one section per draft — post_id +
     headline, the body verbatim, hashtags, numbered citations, the briefs it
@@ -270,7 +187,7 @@ def build_run_report(
     bundle_dir: Path,
     date_slug: str,
     artifacts: RunArtifacts,
-    integrity: dict[str, DraftIntegrity],
+    integrity: dict[str, Certification],
 ) -> dict[str, Any]:
     """Assemble the structured run report: counts + paths only, never copies of
     the artifacts themselves (principle #3)."""
@@ -324,8 +241,14 @@ def build_run_report(
     }
 
 
-def _marks(integrity: dict[str, DraftIntegrity], post_id: str) -> DraftIntegrity:
-    return integrity.get(post_id, DraftIntegrity(provenance_ok=False, floor_ok=False))
+def _marks(integrity: dict[str, Certification], post_id: str) -> Certification:
+    """An absent certification reads as untrustworthy, never as a pass."""
+    return integrity.get(
+        post_id,
+        Certification(
+            provenance_ok=False, gate_status="missing", gate_passed=None, floor_ok=False
+        ),
+    )
 
 
 def export_run(
@@ -388,8 +311,6 @@ __all__ = [
     "BRIEFS_EXPORT_FILENAME",
     "POSTS_MD_FILENAME",
     "RUN_REPORT_FILENAME",
-    "DraftIntegrity",
-    "LoadedDraft",
     "RunArtifacts",
     "build_run_report",
     "bundle_dir_for",

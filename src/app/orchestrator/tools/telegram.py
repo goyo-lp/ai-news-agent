@@ -41,13 +41,23 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
-from app.orchestrator import state
 from app.orchestrator.schemas import PostProposal
-from app.orchestrator.services.evidence_floor import meets_evidence_floor
-from app.orchestrator.services.provenance import verify_draft
+from app.orchestrator.services.drafts import (
+    Certification,
+    DraftLoadError,
+    LoadedDraft,
+    certify,
+    load_draft,
+)
 from app.services.telegram_client import TELEGRAM_TEXT_LIMIT, TelegramClient
 
 logger = logging.getLogger(__name__)
+
+
+def _error(reason: str, message: str, **extra: Any) -> dict[str, Any]:
+    """The tool's structured failure shape. Every refusal is a value the LLM
+    can branch on, never a raise into the agent loop."""
+    return {"status": "error", "reason": reason, "error": message, **extra}
 
 # The send-side cap is 4096 (Telegram's sendMessage text limit). The post
 # body is capped to 182 words by the quality gate, well under that limit;
@@ -134,159 +144,80 @@ def _safe_truncate_html(text: str, limit: int) -> str:
     return cut
 
 
-def _check_evidence_floor(settings: Settings, proposal: PostProposal) -> tuple[bool, str]:
-    """Load the brief behind a draft and apply the evidence floor. The
-    verified copy wins; the pre-verification copy is the fallback (its
-    ``unverified`` status will fail the floor with an honest reason). A
-    missing/unreadable brief fails closed."""
-    if not proposal.supporting_topic_ids:
-        return False, "draft has no supporting_topic_ids; cannot check the evidence floor"
-    topic_id = proposal.supporting_topic_ids[0]
-    brief = state.read_brief(topic_id, settings.orchestrator_data_dir)
-    if brief is None:
-        return False, f"no readable brief for topic {topic_id!r}; cannot verify the evidence floor"
-    passes, why = meets_evidence_floor(brief, settings)
-    return passes, ("" if passes else f"brief {topic_id!r} below evidence floor: {why}")
+def _refusal(draft: LoadedDraft, cert: Certification) -> dict[str, Any] | None:
+    """Why this draft must not ship, or None if it may.
+
+    Order is the contract: provenance before the gate (an unsigned draft is
+    refused without the gate even being consulted — its verdict is as
+    untrustworthy as the draft), and the gate before the evidence floor (a
+    draft the gate rejected is refused whether or not a brief exists).
+    """
+    if not cert.provenance_ok:
+        return _error(
+            "provenance_invalid",
+            "Draft is not signed by the writer's submit_draft tool; "
+            "re-author it via the writer-subagent before delivery.",
+        )
+    if cert.gate_status == "missing":
+        return _error(
+            "gate_verdict_missing",
+            f"No gate verdict for {draft.post_id}; run quality_gate before deliver_telegram.",
+        )
+    if cert.gate_status == "malformed":
+        return _error(
+            "gate_verdict_invalid_json",
+            f"Gate verdict for {draft.post_id} is not readable JSON.",
+        )
+    if cert.gate_passed is not True:
+        return _error(
+            "gate_not_passed",
+            f"Gate verdict for {draft.post_id} does not report passed=True "
+            f"(got {(draft.gate_verdict or {}).get('passed')!r}); "
+            "re-delegate the writer to fix the draft before delivery.",
+            gate_passed=(draft.gate_verdict or {}).get("passed"),
+        )
+    if not cert.floor_ok:
+        return _error("verification_floor", cert.floor_reason)
+    return None
 
 
 async def _deliver_one(post_id: str, settings: Settings) -> dict[str, Any]:
-    """Read + provenance-check + gate-check + floor-check + format + send one
-    draft. Returns the compressed summary that rides back to the coordinator's
-    LLM — never the post body or the gate verdict's reasons list (those live
-    on disk)."""
-    # 1. Resolve paths + path-traversal guard.
+    """Read + certify + format + send one draft. Returns the compressed summary
+    that rides back to the caller — never the post body or the gate verdict's
+    reasons list (those live on disk)."""
     try:
-        draft_file = state.draft_path(post_id, settings.orchestrator_data_dir)
-        gate_file = state.gate_path(post_id, settings.orchestrator_data_dir)
-    except ValueError as exc:
-        return {
-            "post_id": post_id,
-            "status": "error",
-            "reason": "invalid_post_id",
-            "error": str(exc),
-        }
+        draft = load_draft(post_id, settings.orchestrator_data_dir)
+    except DraftLoadError as exc:
+        return {"post_id": post_id, **_error(exc.reason, str(exc))}
 
-    # 2. Read the draft.
-    if not draft_file.exists():
-        return {
-            "post_id": post_id,
-            "status": "error",
-            "reason": "draft_not_found",
-            "error": f"No draft at {draft_file}",
-        }
+    refusal = _refusal(draft, certify(draft, settings))
+    if refusal is not None:
+        return {"post_id": post_id, **refusal}
 
-    try:
-        raw_draft = json.loads(draft_file.read_text(encoding="utf-8"))
-        proposal = PostProposal.model_validate(raw_draft)
-    except Exception as exc:
-        return {
-            "post_id": post_id,
-            "status": "error",
-            "reason": "draft_invalid_json",
-            "error": str(exc),
-        }
-
-    # 2b. Provenance: only drafts signed by the writer's submit_draft tool may
-    # ship. An LLM (coordinator or writer) can always write_file a draft —
-    # what it cannot do is forge the HMAC key it never sees. This is the
-    # deterministic stop for the 2026-07-25 failure mode (coordinator
-    # self-authored + self-gated all five drafts).
-    if not isinstance(raw_draft, dict) or not verify_draft(raw_draft, settings):
-        return {
-            "post_id": post_id,
-            "status": "error",
-            "reason": "provenance_invalid",
-            "error": (
-                "Draft is not signed by the writer's submit_draft tool; "
-                "re-author it via the writer-subagent before delivery."
-            ),
-        }
-
-    # 3. Read the gate verdict and verify passed=True. Refuse to ship a
-    # draft the gate didn't certify — that's the whole point of the gate.
-    if not gate_file.exists():
-        return {
-            "post_id": post_id,
-            "status": "error",
-            "reason": "gate_verdict_missing",
-            "error": (
-                f"No gate verdict at {gate_file}; run quality_gate before "
-                "deliver_telegram."
-            ),
-        }
-    try:
-        gate_verdict = json.loads(gate_file.read_text(encoding="utf-8"))
-    except Exception as exc:
-        return {
-            "post_id": post_id,
-            "status": "error",
-            "reason": "gate_verdict_invalid_json",
-            "error": str(exc),
-        }
-
-    if gate_verdict.get("passed") is not True:
-        # Note the strict ``is not True`` — the gate's canonical producer
-        # (quality_gate via dataclasses.asdict + json.dumps) writes a real
-        # Python bool that round-trips to ``True`` / ``False``. But the
-        # file on disk is *untrusted*: the writer subagent (an LLM) can
-        # author ``drafts/<post_id>.gate.json`` via deepagents' built-in
-        # ``write_file`` with a "helpful" ``{"passed": "True"}`` /
-        # ``{"passed": 1}`` / ``{"passed": ["no"]}`` etc. A truthy-but-
-        # not-bool value would silently pass a ``not gate_verdict.get(
-        # "passed")`` check — exactly the "model helpfully overrode the
-        # gate" failure mode this delivery path exists to prevent. The
-        # ``is not True`` identity check rejects every truthy-not-bool
-        # variant loudly. The pinned test
-        # ``test_gate_verdict_malformed_passed_value_refuses_delivery``
-        # covers several flavors of the leak shape.
-        return {
-            "post_id": post_id,
-            "status": "error",
-            "reason": "gate_not_passed",
-            "gate_passed": gate_verdict.get("passed"),
-            "error": (
-                f"Gate verdict at {gate_file} does not report "
-                f"passed=True (got {gate_verdict.get('passed')!r}); "
-                "re-delegate the writer to fix the draft before delivery."
-            ),
-        }
-
-    # 3b. Evidence floor: the brief behind the draft must still clear the
-    # floor at send time (defense-in-depth for hand-written/legacy drafts —
-    # the spine + submit_draft already enforce this upstream).
-    floor_ok, floor_reason = _check_evidence_floor(settings, proposal)
-    if not floor_ok:
-        return {
-            "post_id": post_id,
-            "status": "error",
-            "reason": "verification_floor",
-            "error": floor_reason,
-        }
-
-    # 4. Format the message.
-    message_body = _format_post_message(proposal)
-
-    # 5. Send to the linkedin bot. Hard-coded bot="linkedin" — a LinkedIn
-    # post proposal can't be routed anywhere else; sending it to the news
-    # chat would be a coordinated misroute.
+    # Hard-coded bot="linkedin" — a LinkedIn post proposal can't be routed
+    # anywhere else; sending it to the news chat would be a coordinated
+    # misroute. Auto-dry-runs when the linkedin profile is unconfigured.
     client = TelegramClient(settings)
     send_result = await client.send_message(
-        message_body,
+        _format_post_message(draft.proposal),
         bot="linkedin",
         dry_run=not (settings.telegram_linkedin_bot_token or "").strip()
         or not (settings.telegram_linkedin_chat_id or "").strip(),
     )
 
-    # 6. Compressed summary back to the coordinator's LLM.
     return {
         "post_id": post_id,
         "status": send_result.get("status", "error"),
         "bot": "linkedin",
         "message_id": send_result.get("message_id"),
         # The dry_run preview never includes the full message body in the
-        # summary — that's principle #3. Surface just enough to let the
-        # coordinator log the routing decision (bot + status + chars).
-        "preview_chars": len(send_result.get("preview", "")) if send_result.get("status") == "dry_run" else None,
+        # summary — that's principle #3. Surface just enough to let the caller
+        # log the routing decision (bot + status + chars).
+        "preview_chars": (
+            len(send_result.get("preview", ""))
+            if send_result.get("status") == "dry_run"
+            else None
+        ),
         "error": send_result.get("error"),
     }
 

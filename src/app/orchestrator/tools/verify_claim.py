@@ -106,134 +106,114 @@ def read_brief_from_state(data_dir: str, topic_id: str) -> ResearchBrief:
     return ResearchBrief.model_validate(payload)
 
 
+def _failed(topic_id: str, reason: str) -> dict[str, Any]:
+    """The tool's failure shape. Every failure mode reports ``failed`` with
+    zero confidence — an unverified brief must never read as a weak pass."""
+    return {
+        "topic_id": topic_id,
+        "verification_status": "failed",
+        "verification_confidence": 0.0,
+        "notes_count": 0,
+        "status": "error",
+        "reason": reason,
+        "path": None,
+    }
+
+
+def _load_brief(settings: Settings, topic_id: str) -> ResearchBrief:
+    """Load the brief to verify, normalizing every read failure into a
+    ``ValueError`` whose message is the reason the tool reports."""
+    try:
+        return read_brief_from_state(settings.orchestrator_data_dir, topic_id)
+    except FileNotFoundError:
+        raise ValueError(f"brief not found for topic_id {topic_id!r}") from None
+    except ValueError:
+        # Path-traversal defense and pydantic validation drift already carry a
+        # usable message.
+        raise
+    except Exception as exc:
+        logger.warning("verify_claim brief load failed for %r: %s", topic_id, exc)
+        raise ValueError(f"{type(exc).__name__}: {exc}") from exc
+
+
+def _attempts_exhausted(settings: Settings, topic_id: str, budget: AttemptBudget) -> dict[str, Any]:
+    """Refuse further spend, surfacing the last known verdict so the subagent
+    can finish honestly instead of reporting nothing."""
+    verified_path = state.verified_brief_path(topic_id, settings.orchestrator_data_dir)
+    last = state.read_brief(topic_id, settings.orchestrator_data_dir)
+    return {
+        "topic_id": topic_id,
+        "verification_status": last.verification_status if last else "unknown",
+        "verification_confidence": last.verification_confidence if last else 0.0,
+        "notes_count": 0,
+        "status": "attempts_exhausted",
+        "reason": (
+            f"verification attempt budget exhausted ({budget.max_attempts} per "
+            "topic); stop re-verifying and report the verdict you have"
+        ),
+        "path": str(verified_path) if verified_path.exists() else None,
+    }
+
+
 async def _verify_and_write(
     args: dict[str, Any], settings: Settings, budget: AttemptBudget
 ) -> dict[str, Any]:
     """Run the verifier on one brief and persist the verified copy. Returns a
     compressed summary; the brief body never rides back through the LLM."""
-    raw_topic = str(args.get("topic_id") or "").strip()
-    if not raw_topic:
-        return {
-            "topic_id": "",
-            "verification_status": "failed",
-            "verification_confidence": 0.0,
-            "notes_count": 0,
-            "status": "error",
-            "reason": "topic_id is required",
-            "path": None,
-        }
+    topic_id = str(args.get("topic_id") or "").strip()
+    if not topic_id:
+        return _failed("", "topic_id is required")
 
     try:
-        brief = read_brief_from_state(settings.orchestrator_data_dir, raw_topic)
-    except FileNotFoundError:
-        return {
-            "topic_id": raw_topic,
-            "verification_status": "failed",
-            "verification_confidence": 0.0,
-            "notes_count": 0,
-            "status": "error",
-            "reason": f"brief not found for topic_id {raw_topic!r}",
-            "path": None,
-        }
+        brief = _load_brief(settings, topic_id)
     except ValueError as exc:
-        # Path-traversal defense _and_ pydantic validation drift on load.
-        return {
-            "topic_id": raw_topic,
-            "verification_status": "failed",
-            "verification_confidence": 0.0,
-            "notes_count": 0,
-            "status": "error",
-            "reason": str(exc),
-            "path": None,
-        }
-    except Exception as exc:
-        logger.warning("verify_claim brief load failed for %r: %s", raw_topic, exc)
-        return {
-            "topic_id": raw_topic,
-            "verification_status": "failed",
-            "verification_confidence": 0.0,
-            "notes_count": 0,
-            "status": "error",
-            "reason": f"{type(exc).__name__}: {exc}",
-            "path": None,
-        }
-
-    hours_back_raw = args.get("hours_back")
-    hours_back = int(hours_back_raw) if hours_back_raw is not None else 24
-    dry_run = not (settings.openrouter_api_key or "").strip()
+        return _failed(topic_id, str(exc))
 
     # Attempt budget: refuse churn before spending. Checked after the brief
     # load so a missing brief doesn't burn an attempt.
-    if budget.exhausted(raw_topic):
-        # Surface the last known verdict so the subagent can finish honestly.
-        verified_path = state.verified_brief_path(raw_topic, settings.orchestrator_data_dir)
-        last_status, last_confidence = "unknown", 0.0
-        last = state.read_brief(raw_topic, settings.orchestrator_data_dir)
-        if last is not None:
-            last_status = last.verification_status
-            last_confidence = last.verification_confidence
-        return {
-            "topic_id": raw_topic,
-            "verification_status": last_status,
-            "verification_confidence": last_confidence,
-            "notes_count": 0,
-            "status": "attempts_exhausted",
-            "reason": (
-                f"verification attempt budget exhausted ({budget.max_attempts} per "
-                "topic); stop re-verifying and report the verdict you have"
-            ),
-            "path": str(verified_path) if verified_path.exists() else None,
-        }
-    budget.record_attempt(raw_topic)
+    if budget.exhausted(topic_id):
+        return _attempts_exhausted(settings, topic_id, budget)
+    budget.record_attempt(topic_id)
 
-    verifier = BriefVerifier(settings)
+    hours_back_raw = args.get("hours_back")
     try:
         # Wall-clock bound: one verification call may not exceed
         # verification_timeout_seconds (trace showed single calls at 80-94s).
         verified = await asyncio.wait_for(
-            verifier.verify_one(brief, hours_back=hours_back, dry_run=dry_run),
+            BriefVerifier(settings).verify_one(
+                brief,
+                hours_back=int(hours_back_raw) if hours_back_raw is not None else 24,
+                dry_run=not (settings.openrouter_api_key or "").strip(),
+            ),
             timeout=settings.verification_timeout_seconds,
         )
     except TimeoutError:
         logger.warning(
             "verify_claim timed out for %r after %ss",
-            raw_topic,
+            topic_id,
             settings.verification_timeout_seconds,
         )
-        return {
-            "topic_id": raw_topic,
-            "verification_status": "failed",
-            "verification_confidence": 0.0,
-            "notes_count": 0,
-            "status": "error",
-            "reason": f"verification timed out after {settings.verification_timeout_seconds}s",
-            "path": None,
-        }
+        return _failed(
+            topic_id,
+            f"verification timed out after {settings.verification_timeout_seconds}s",
+        )
     except Exception as exc:
         # The verifier's per-brief worker already falls back inside, so a raise
         # here is catastrophic. Record it as `failed` and never propagate into
         # the agent loop.
-        logger.warning("verify_claim verifier raised for %r: %s", raw_topic, exc)
-        return {
-            "topic_id": raw_topic,
-            "verification_status": "failed",
-            "verification_confidence": 0.0,
-            "notes_count": 0,
-            "status": "error",
-            "reason": f"{type(exc).__name__}: {exc}",
-            "path": None,
-        }
+        logger.warning("verify_claim verifier raised for %r: %s", topic_id, exc)
+        return _failed(topic_id, f"{type(exc).__name__}: {exc}")
 
     path = write_verified_brief_to_state(verified, settings.orchestrator_data_dir)
     status = verified.verification_status
     if status not in _VALID_STATUSES:
         # Catch a verifier that emits something the enum doesn't recognize —
-        # surfaces distinctly rather than silently coercing.
-        logger.warning("verify_claim returned unknown status %r for %s", status, raw_topic)
+        # surface it distinctly rather than silently coercing.
+        logger.warning("verify_claim returned unknown status %r for %s", status, topic_id)
         status = "failed"
 
     return {
-        "topic_id": raw_topic,
+        "topic_id": topic_id,
         "verification_status": status,
         "verification_confidence": round(float(verified.verification_confidence), 3),
         "notes_count": len(verified.verification_notes),
