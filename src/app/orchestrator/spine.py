@@ -35,16 +35,18 @@ from langsmith import traceable
 
 from app.config import Settings
 from app.orchestrator import state
-from app.orchestrator.schemas import ResearchBrief, TopicCandidate
+from app.orchestrator.schemas import TopicCandidate
+from app.orchestrator.services.drafts import DraftLoadError, load_draft
+from app.orchestrator.services.editor_veto import veto_irrelevant_topics
+from app.orchestrator.services.evidence_floor import meets_evidence_floor
 from app.orchestrator.spine_result import (
     SelectedTopic,
     SkippedTopic,
     SpineResult,
+    SpineStatus,
     TaskOutcome,
     WrittenPost,
 )
-from app.orchestrator.services.editor_veto import veto_irrelevant_topics
-from app.orchestrator.services.evidence_floor import meets_evidence_floor
 from app.orchestrator.subagents.research import build_research_agent
 from app.orchestrator.subagents.writer import build_writer_agent
 from app.orchestrator.tools.news import build_fetch_curated_ai_news_tool
@@ -127,20 +129,6 @@ def _read_topics(settings: Settings) -> list[TopicCandidate]:
         return []
 
 
-def _read_verified_brief(settings: Settings, topic_id: str) -> ResearchBrief | None:
-    try:
-        path = state.verified_brief_path(topic_id, settings.orchestrator_data_dir)
-    except ValueError:
-        return None
-    if not path.exists():
-        return None
-    try:
-        return ResearchBrief.model_validate_json(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        logger.warning("spine: unreadable verified brief for %s: %s", topic_id, exc)
-        return None
-
-
 def _final_message_text(result: Any) -> str:
     """Pull the agent's final AI message text out of an ainvoke result —
     the same shape SubAgentMiddleware returned as the task() result."""
@@ -167,7 +155,7 @@ async def _run_agent_task(
     description: str,
     topic_id: str,
     timeout_seconds: int,
-) -> dict[str, Any]:
+) -> TaskOutcome:
     """Invoke one subagent for one topic with a hard wall-clock bound — the
     per-topic timeout the research.py docstring always promised and the
     LLM-coordinator path never implemented. A timeout/error kills ONE
@@ -177,27 +165,47 @@ async def _run_agent_task(
             agent.ainvoke({"messages": [{"role": "user", "content": description}]}),
             timeout=timeout_seconds,
         )
-        return {
-            "topic_id": topic_id,
-            "status": "ok",
-            "summary": _final_message_text(result)[:500],
-        }
+        return TaskOutcome(
+            topic_id=topic_id, status="ok", detail=_final_message_text(result)[:500]
+        )
     except TimeoutError:
         logger.warning(
             "spine: task for topic %s timed out after %ss", topic_id, timeout_seconds
         )
-        return {
-            "topic_id": topic_id,
-            "status": "timeout",
-            "error": f"timed out after {timeout_seconds}s",
-        }
+        return TaskOutcome(
+            topic_id=topic_id,
+            status="timeout",
+            detail=f"timed out after {timeout_seconds}s",
+        )
     except Exception as exc:
         logger.warning("spine: task for topic %s failed: %s", topic_id, exc)
-        return {
-            "topic_id": topic_id,
-            "status": "error",
-            "error": f"{type(exc).__name__}: {exc}",
-        }
+        return TaskOutcome(
+            topic_id=topic_id, status="error", detail=f"{type(exc).__name__}: {exc}"
+        )
+
+
+async def _fan_out(
+    agent: _AgentLike,
+    tasks: list[tuple[str, str]],
+    *,
+    timeout_seconds: int,
+) -> list[TaskOutcome]:
+    """Run one subagent task per ``(topic_id, description)`` concurrently, each
+    hard-bounded. Results come back in input order, so callers can zip them
+    against whatever they derived the tasks from."""
+    return list(
+        await asyncio.gather(
+            *(
+                _run_agent_task(
+                    agent,
+                    description=description,
+                    topic_id=topic_id,
+                    timeout_seconds=timeout_seconds,
+                )
+                for topic_id, description in tasks
+            )
+        )
+    )
 
 
 def _research_description(topic: TopicCandidate) -> str:
@@ -228,6 +236,15 @@ def _writer_description(topic_id: str, post_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _stop(result: SpineResult, status: SpineStatus, *, error: str | None = None) -> SpineResult:
+    """Terminate the run with an explicit status. Every exit from the pipeline
+    goes through here — including the successful one — so the status a caller
+    reads is always one a stage deliberately set."""
+    result.status = status
+    result.error = error
+    return result
+
+
 @traceable(run_type="chain", name="propose-spine", tags=["orchestrator", "spine"])
 async def run_propose_spine(
     settings: Settings,
@@ -245,7 +262,10 @@ async def run_propose_spine(
     logged); the artifacts themselves land on disk under the orchestrator data
     dir, so export + delivery read them from there.
     """
-    result = SpineResult(run_id=run_id, status="ok")
+    # Status is set only by _stop(), at every exit including the successful
+    # one — so a stage added later cannot fall through and report "ok" on a run
+    # that produced nothing.
+    result = SpineResult(run_id=run_id, status="no_articles")
 
     # 1. Fetch + 2. Rank — deterministic tools driven from code (no planner
     # tokens spent sequencing them).
@@ -253,21 +273,17 @@ async def run_propose_spine(
     fetch_summary = json.loads(await fetch_tool.ainvoke({"limit": limit}))
     result.fetched = int(fetch_summary.get("count", 0))
     if result.fetched == 0:
-        result.status = "no_articles"
-        return result
+        return _stop(result, "no_articles")
 
     rank_tool = build_technical_rank_tool(settings)
     rank_summary = json.loads(await rank_tool.ainvoke({}))
     if rank_summary.get("status") == "error":
-        result.status = "rank_failed"
-        result.error = rank_summary.get("reason")
-        return result
+        return _stop(result, "rank_failed", error=rank_summary.get("reason"))
 
     topics = _read_topics(settings)
     result.topics = len(topics)
     if not topics:
-        result.status = "no_topics"
-        return result
+        return _stop(result, "no_topics")
 
     # 3. Editorial veto over the whole pool (one batched LLM call, fail-open),
     # then deterministic diversity-aware selection under the cap — the cap is
@@ -286,84 +302,64 @@ async def run_propose_spine(
         for t in selected
     ]
     if not selected:
-        result.status = "no_selection"
-        return result
+        return _stop(result, "no_selection")
 
     # 4. Research fan-out — concurrent, each task hard-bounded by
     # research_task_timeout_seconds. This is the code-side enforcement the
     # research subagent's docstring always referenced.
     researcher = research_agent or build_research_agent(settings)
-    research_results = await asyncio.gather(
-        *(
-            _run_agent_task(
-                researcher,
-                description=_research_description(topic),
-                topic_id=topic.topic_id,
-                timeout_seconds=settings.research_task_timeout_seconds,
-            )
-            for topic in selected
-        )
+    result.research = await _fan_out(
+        researcher,
+        [(t.topic_id, _research_description(t)) for t in selected],
+        timeout_seconds=settings.research_task_timeout_seconds,
     )
-    result.research = [
-        TaskOutcome(topic_id=r["topic_id"], status=r["status"]) for r in research_results
-    ]
 
     # 5. Evidence floor — only floored topics may be drafted. This is the
     # deterministic version of the coordinator's "skip insufficient_evidence"
     # prose rule, now with teeth: confidence + citation breadth thresholds.
     writable: list[TopicCandidate] = []
     for topic in selected:
-        brief = _read_verified_brief(settings, topic.topic_id)
+        brief = state.read_brief(topic.topic_id, settings.orchestrator_data_dir)
         if brief is None:
             result.skipped_floor.append(
-                SkippedTopic(topic_id=topic.topic_id, reason="no verified brief")
+                SkippedTopic(topic_id=topic.topic_id, reason="no brief on disk")
             )
             continue
         passes, why = meets_evidence_floor(brief, settings)
         if passes:
             writable.append(topic)
         else:
-            result.skipped_floor.append(
-                SkippedTopic(topic_id=topic.topic_id, reason=why)
-            )
+            result.skipped_floor.append(SkippedTopic(topic_id=topic.topic_id, reason=why))
     if not writable:
-        result.status = "nothing_above_floor"
-        return result
+        return _stop(result, "nothing_above_floor")
 
     # 6. Writer fan-out — concurrent, hard-bounded, deterministic post_ids.
     writer = writer_agent or build_writer_agent(settings)
     date_slug = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     taken: set[str] = set()
     assignments = [(topic, post_id_for(topic.title, date_slug, taken)) for topic in writable]
-    write_results = await asyncio.gather(
-        *(
-            _run_agent_task(
-                writer,
-                description=_writer_description(topic.topic_id, post_id),
-                topic_id=topic.topic_id,
-                timeout_seconds=settings.writer_task_timeout_seconds,
-            )
-            for topic, post_id in assignments
-        )
+    write_results = await _fan_out(
+        writer,
+        [(topic.topic_id, _writer_description(topic.topic_id, post_id)) for topic, post_id in assignments],
+        timeout_seconds=settings.writer_task_timeout_seconds,
     )
 
-    # 7. Verify each draft's gate verdict from disk (the delivery layer
-    # re-checks everything anyway; this is the run summary's honesty check).
-    for (topic, post_id), outcome in zip(assignments, write_results):
-        gate_passed = False
+    # 7. Report each draft's gate verdict from disk. The delivery layer
+    # re-certifies everything anyway; this is the run summary's honesty check,
+    # and it reads the verdict through the same loader delivery uses so the two
+    # can't disagree about what "gated" means.
+    for (topic, post_id), outcome in zip(assignments, write_results, strict=True):
         try:
-            gate_file = state.gate_path(post_id, settings.orchestrator_data_dir)
-            if gate_file.exists():
-                verdict = json.loads(gate_file.read_text(encoding="utf-8"))
-                gate_passed = verdict.get("passed") is True
-        except Exception as exc:
-            logger.warning("spine: gate read failed for %s: %s", post_id, exc)
+            gate_passed = load_draft(post_id, settings.orchestrator_data_dir).gate_passed
+        except DraftLoadError as exc:
+            logger.warning("spine: no readable draft for %s: %s", post_id, exc)
+            gate_passed = None
         result.written.append(
             WrittenPost(
                 topic_id=topic.topic_id,
                 post_id=post_id,
-                writer_status=outcome["status"],
-                gate_passed=gate_passed,
+                writer_status=outcome.status,
+                gate_passed=gate_passed is True,
             )
         )
     logger.info(
@@ -376,7 +372,7 @@ async def run_propose_spine(
         result.drafts_passed,
         len(result.written),
     )
-    return result
+    return _stop(result, "ok")
 
 
 __all__ = [

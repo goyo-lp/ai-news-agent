@@ -31,10 +31,16 @@ class SelectedTopic:
 
 @dataclass(frozen=True)
 class TaskOutcome:
-    """One subagent invocation's result: ``ok`` | ``timeout`` | ``error``."""
+    """One subagent invocation's result.
+
+    ``detail`` carries the agent's final message on success and the failure
+    text on timeout/error — enough for an operator to see what happened without
+    the full transcript riding back through the run summary.
+    """
 
     topic_id: str
-    status: str
+    status: Literal["ok", "timeout", "error"]
+    detail: str = ""
 
 
 @dataclass(frozen=True)

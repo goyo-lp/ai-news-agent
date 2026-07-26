@@ -213,7 +213,27 @@ def test_spine_skips_topic_when_research_fails(
 
     assert summary.research[0].status == "error"
     assert summary.status == "nothing_above_floor"
-    assert summary.skipped_floor[0].reason == "no verified brief"
+    assert summary.skipped_floor[0].reason == "no brief on disk"
+    assert writer.calls == []
+
+
+def test_spine_names_the_verification_status_when_a_brief_is_unverified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unverified brief is floored out with the actual status in the reason,
+    not a bare "no brief" — the spine reads through the same loader the rest of
+    the pipeline uses, which prefers the verified copy but falls back to the
+    unverified one so the refusal can name what it found."""
+    settings = settings_for(tmp_path)
+    mock_run_curation([fixture_article("topic-a")], monkeypatch)
+    research = StubResearchAgent(
+        settings, brief_kwargs={"verification_status": "unverified"}
+    )
+
+    summary, _research, writer = _run(settings, monkeypatch, research=research)
+
+    assert summary.status == "nothing_above_floor"
+    assert "unverified" in summary.skipped_floor[0].reason
     assert writer.calls == []
 
 
