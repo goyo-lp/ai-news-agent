@@ -43,6 +43,7 @@ import asyncio
 import json
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any, cast
 
 import httpx
@@ -60,6 +61,16 @@ from app.services.middleware import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _Evidence:
+    """Corroborating material gathered for one brief. ``url_count`` is reported
+    in the heuristic path's notes, so it survives even when a URL yielded no
+    usable text and therefore contributed no entry to ``texts``."""
+
+    texts: list[str]
+    url_count: int
 
 
 class BriefVerifier:
@@ -153,6 +164,34 @@ class BriefVerifier:
         hours_back: int,
         dry_run: bool,
     ) -> ResearchBrief:
+        """Gather evidence for one brief, then either apply the verifier
+        model's verdict or fall back heuristically when no model is available."""
+        evidence = await self._gather_evidence(client, brief, hours_back, dry_run)
+
+        if dry_run or not (self.settings.openrouter_api_key or "").strip():
+            return _heuristic_verdict(brief, evidence)
+
+        prompt = _build_verification_prompt(brief, evidence.texts)
+        parsed = await self._run_verifier_models(client=client, prompt=prompt)
+        return _apply_verdict(brief, parsed)
+
+    async def _gather_evidence(
+        self,
+        client: httpx.AsyncClient,
+        brief: ResearchBrief,
+        hours_back: int,
+        dry_run: bool,
+    ) -> _Evidence:
+        """Collect corroborating text for one brief.
+
+        Primary corroboration is the brief's own cited sources: they carry the
+        topic's clustered supporting_urls — independent coverage the RSS
+        pipeline already found and the researcher cited — so they're extracted
+        first, no search required. Web search is a *fallback*, reached for only
+        when those sources prove too thin. Extracting the base sources before
+        deciding to search is a deliberate serialization: the skip decision
+        depends on how much base evidence actually came back.
+        """
         sources_per_topic = max(1, self.settings.verification_sources_per_topic)
 
         base_urls: list[str] = []
@@ -162,131 +201,78 @@ class BriefVerifier:
             if len(base_urls) >= sources_per_topic:
                 break
 
-        # Primary corroboration: the brief's own cited sources. These carry the
-        # topic's clustered supporting_urls — independent coverage the RSS
-        # pipeline already found and the researcher cited — so extract them
-        # first, no search required.
-        base_extracted = await extract_url_texts(base_urls, self.settings, dry_run=dry_run)
-        usable_base = sum(1 for url in base_urls if base_extracted.get(url))
+        extracted = await extract_url_texts(base_urls, self.settings, dry_run=dry_run)
+        usable_base = sum(1 for url in base_urls if extracted.get(url))
 
-        extracted: dict[str, str] = dict(base_extracted)
-        evidence_urls: list[str] = list(base_urls)
-        deduped_corroborating: list[Any] = []
+        evidence_urls = list(base_urls)
+        corroborating: list[Any] = []
 
-        # Web search is a *fallback*: reach for it only when the cluster's own
-        # sources are too thin to corroborate. Whenever RSS clustering already
-        # surfaced enough independent coverage, a running SearXNG instance is
-        # never needed. (Extracting base sources first — before deciding to
-        # search — is a deliberate serialization: the skip decision depends on
-        # how much base evidence we actually got.)
         if usable_base < sources_per_topic:
-            queries = _build_verifier_queries(brief)
-            gathered_searches = (
-                await asyncio.gather(
-                    *(
-                        self.search_client.search_news(
-                            client=client,
-                            query=query,
-                            hours_back=hours_back,
-                            max_results=max(2, sources_per_topic),
-                            dry_run=dry_run,
-                        )
-                        for query in queries
-                    ),
-                    return_exceptions=True,
-                )
-                if queries
-                else []
+            corroborating = await self._search_for_corroboration(
+                client, brief, hours_back, dry_run, sources_per_topic
             )
-
-            corroborating: list[Any] = []
-            for maybe_items in gathered_searches:
-                if isinstance(maybe_items, Exception):
-                    logger.warning(
-                        "Verifier evidence search failed for %s: %s",
-                        brief.topic_id,
-                        maybe_items,
-                    )
-                    continue
-                corroborating.extend(cast(list[Any], maybe_items))
-
-            deduped_corroborating = _dedupe_discovered(corroborating)
             evidence_urls.extend(
-                item.url for item in deduped_corroborating if item.url not in evidence_urls
+                item.url for item in corroborating if item.url not in evidence_urls
             )
             evidence_urls = evidence_urls[: max(3, sources_per_topic + 1)]
 
             delta_urls = [url for url in evidence_urls if url not in base_urls]
-            delta_extracted = await extract_url_texts(delta_urls, self.settings, dry_run=dry_run)
-            extracted.update(delta_extracted)
+            extracted.update(
+                await extract_url_texts(delta_urls, self.settings, dry_run=dry_run)
+            )
 
-        evidence_texts: list[str] = []
         snippet_by_url = {
             item.url: " ".join((item.raw_content or item.snippet or "").split()).strip()
-            for item in deduped_corroborating
+            for item in corroborating
         }
+        texts: list[str] = []
         for url in evidence_urls:
             content = " ".join(extracted.get(url, "").split()).strip()
             if not content:
                 content = snippet_by_url.get(url, "")
             if content:
-                evidence_texts.append(f"URL: {url}\n{content[:1200]}")
+                texts.append(f"URL: {url}\n{content[:1200]}")
 
-        if dry_run or not (self.settings.openrouter_api_key or "").strip():
-            fallback = brief.model_copy(deep=True)
-            fallback.verification_status = "partially_verified"
-            fallback.verification_confidence = 0.6 if evidence_texts else 0.4
-            fallback.verification_notes = _merge_notes(
-                fallback.verification_notes,
-                [
-                    "Dry-run or missing verifier model key; verification executed with heuristic fallback.",
-                    f"Evidence URLs checked: {len(evidence_urls)}",
-                ],
-            )
-            fallback.summary = _make_cautious(fallback.summary)
-            return fallback
+        return _Evidence(texts=texts, url_count=len(evidence_urls))
 
-        prompt = _build_verification_prompt(brief, evidence_texts)
-        parsed = await self._run_verifier_models(client=client, prompt=prompt)
+    async def _search_for_corroboration(
+        self,
+        client: httpx.AsyncClient,
+        brief: ResearchBrief,
+        hours_back: int,
+        dry_run: bool,
+        sources_per_topic: int,
+    ) -> list[Any]:
+        """Run the verifier's evidence searches concurrently and dedupe the
+        results. A failed search is logged and dropped, never raised — thin
+        corroboration is a verdict input, not an error."""
+        queries = _build_verifier_queries(brief)
+        if not queries:
+            return []
 
-        verified = brief.model_copy(deep=True)
-        verdict = str(parsed.get("verdict") or "partially_verified").strip().lower()
-        # Defense-in-depth: the model is instructed to return one of three
-        # status values, but if it emits anything else (incl. a case variant
-        # like "Verified" or extra whitespace), fall back to
-        # "partially_verified" rather than raise a pydantic ValidationError
-        # when the brief is later validated. Case-folding means a capital-V
-        # "Verified" doesn't silently demote a confident brief.
-        if verdict not in {"verified", "partially_verified", "insufficient_evidence"}:
-            verdict = "partially_verified"
-        verified.verification_status = verdict  # type: ignore[assignment]
-        verified.verification_confidence = float(parsed.get("confidence") or 0.5)
-
-        verified.summary = _sanitize_access_failure_language(
-            str(parsed.get("corrected_summary") or verified.summary).strip()
-        )
-        verified.technical_significance = _sanitize_access_failure_language(
-            str(parsed.get("corrected_technical_significance") or verified.technical_significance).strip()
-        )
-        verified.business_impact = _sanitize_access_failure_language(
-            str(parsed.get("corrected_business_impact") or verified.business_impact).strip()
-        )
-        verified.why_now = _sanitize_access_failure_language(
-            str(parsed.get("corrected_why_now") or verified.why_now).strip()
+        gathered = await asyncio.gather(
+            *(
+                self.search_client.search_news(
+                    client=client,
+                    query=query,
+                    hours_back=hours_back,
+                    max_results=max(2, sources_per_topic),
+                    dry_run=dry_run,
+                )
+                for query in queries
+            ),
+            return_exceptions=True,
         )
 
-        existing_notes = list(verified.verification_notes)
-        notes_payload = parsed.get("notes")
-        if isinstance(notes_payload, list):
-            parsed_notes = [str(item).strip() for item in notes_payload if str(item).strip()]
-            verified.verification_notes = _merge_notes(existing_notes, parsed_notes)
-        else:
-            verified.verification_notes = _merge_notes(existing_notes, ["Verifier returned no notes."])
-
-        if verified.verification_status in {"insufficient_evidence", "partially_verified"}:
-            verified.summary = _make_cautious(verified.summary)
-
-        return verified
+        found: list[Any] = []
+        for maybe_items in gathered:
+            if isinstance(maybe_items, Exception):
+                logger.warning(
+                    "Verifier evidence search failed for %s: %s", brief.topic_id, maybe_items
+                )
+                continue
+            found.extend(cast(list[Any], maybe_items))
+        return _dedupe_discovered(found)
 
     async def _run_verifier_models(self, client: httpx.AsyncClient, prompt: str) -> dict[str, Any]:
         primary_model = self.settings.openrouter_verifier_model
@@ -367,6 +353,64 @@ class BriefVerifier:
 # Prompt + payload helpers (ported verbatim from the reference where the
 # behavior is documented and tested).
 # ---------------------------------------------------------------------------
+
+
+def _heuristic_verdict(brief: ResearchBrief, evidence: _Evidence) -> ResearchBrief:
+    """The no-model path (dry run, or no verifier key). Never claims more than
+    ``partially_verified``, and softens the summary so an unverified claim
+    can't read as a confident one."""
+    fallback = brief.model_copy(deep=True)
+    fallback.verification_status = "partially_verified"
+    fallback.verification_confidence = 0.6 if evidence.texts else 0.4
+    fallback.verification_notes = _merge_notes(
+        fallback.verification_notes,
+        [
+            "Dry-run or missing verifier model key; verification executed with heuristic fallback.",
+            f"Evidence URLs checked: {evidence.url_count}",
+        ],
+    )
+    fallback.summary = _make_cautious(fallback.summary)
+    return fallback
+
+
+def _apply_verdict(brief: ResearchBrief, parsed: dict[str, Any]) -> ResearchBrief:
+    """Fold the verifier model's parsed payload onto a copy of the brief."""
+    verified = brief.model_copy(deep=True)
+
+    verdict = str(parsed.get("verdict") or "partially_verified").strip().lower()
+    # Defense-in-depth: the model is instructed to return one of three status
+    # values, but if it emits anything else (incl. a case variant like
+    # "Verified" or extra whitespace), fall back to "partially_verified" rather
+    # than raise a pydantic ValidationError when the brief is later validated.
+    # Case-folding means a capital-V "Verified" doesn't silently demote a
+    # confident brief.
+    if verdict not in {"verified", "partially_verified", "insufficient_evidence"}:
+        verdict = "partially_verified"
+    verified.verification_status = verdict  # type: ignore[assignment]
+    verified.verification_confidence = float(parsed.get("confidence") or 0.5)
+
+    for field_name in ("summary", "technical_significance", "business_impact", "why_now"):
+        corrected = parsed.get(f"corrected_{field_name}") or getattr(verified, field_name)
+        setattr(
+            verified,
+            field_name,
+            _sanitize_access_failure_language(str(corrected).strip()),
+        )
+
+    notes_payload = parsed.get("notes")
+    parsed_notes = (
+        [str(item).strip() for item in notes_payload if str(item).strip()]
+        if isinstance(notes_payload, list)
+        else ["Verifier returned no notes."]
+    )
+    verified.verification_notes = _merge_notes(
+        list(verified.verification_notes), parsed_notes
+    )
+
+    if verified.verification_status in {"insufficient_evidence", "partially_verified"}:
+        verified.summary = _make_cautious(verified.summary)
+
+    return verified
 
 
 def _build_verification_prompt(brief: ResearchBrief, evidence_texts: list[str]) -> str:

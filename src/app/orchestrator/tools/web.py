@@ -30,6 +30,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
+from app.orchestrator.budgets import SearchCircuit
 from app.orchestrator.services.ranking import DiscoveredItem
 from app.orchestrator.services.searxng_client import (
     SearxngClient,
@@ -45,22 +46,6 @@ logger = logging.getLogger(__name__)
 _WEB_SUBDIR = "web"
 _SEARCH_SUBDIR = "search"
 _EXTRACT_SUBDIR = "extracted"
-
-# Circuit breaker for a silently-dead SearXNG instance (2026-07-25 trace:
-# 57 web_search calls in one run, every one returning zero results — the
-# researcher kept retrying 11+ times per topic because nothing told it to
-# stop). Counts CONSECUTIVE empty/failed searches against a *configured*
-# instance; when the count reaches settings.searxng_empty_circuit_breaker the
-# tool returns status="circuit_open" with an explicit pivot instruction
-# instead of burning another request. A search that returns results resets
-# the count. Process-local; one CLI run = one process.
-_CONSECUTIVE_EMPTY_SEARCHES: list[int] = [0]
-
-
-def _reset_search_circuit() -> None:
-    """Test seam: reset the circuit breaker between tests."""
-    _CONSECUTIVE_EMPTY_SEARCHES[0] = 0
-
 
 def _slug(value: str, length: int = 12) -> str:
     """Stable filesystem slug for a research artifact (query or batch key).
@@ -93,7 +78,9 @@ class WebSearchArgs(BaseModel):
     )
 
 
-async def _run_search(args: dict[str, Any], settings: Settings) -> dict[str, Any]:
+async def _run_search(
+    args: dict[str, Any], settings: Settings, circuit: SearchCircuit
+) -> dict[str, Any]:
     query = str(args.get("query") or "").strip()
     if not query:
         return {"query": "", "status": "error", "reason": "query is required", "path": None}
@@ -108,15 +95,14 @@ async def _run_search(args: dict[str, Any], settings: Settings) -> dict[str, Any
 
     # Circuit breaker: only meaningful against a real instance (the dry-run
     # mock always returns results, so it can never trip this).
-    threshold = max(1, settings.searxng_empty_circuit_breaker)
-    if not dry_run and _CONSECUTIVE_EMPTY_SEARCHES[0] >= threshold:
+    if not dry_run and circuit.is_open:
         return {
             "query": query,
             "result_count": 0,
             "status": "circuit_open",
             "reason": (
                 f"SearXNG returned empty/failed results "
-                f"{_CONSECUTIVE_EMPTY_SEARCHES[0]} times in a row — the search "
+                f"{circuit.consecutive_empty} times in a row — the search "
                 "backend is not producing evidence this run. STOP searching; "
                 "corroborate via fetch_article on the primary_url and "
                 "web_extract on the topic's supporting_urls instead."
@@ -145,21 +131,18 @@ async def _run_search(args: dict[str, Any], settings: Settings) -> dict[str, Any
                 )
             except SearxngSearchError as exc:
                 logger.warning("web_search failed for %r: %s", query, exc)
-                _CONSECUTIVE_EMPTY_SEARCHES[0] += 1
+                circuit.record(found_results=False)
                 return {**empty_summary, "status": "error", "reason": str(exc)}
             except Exception as exc:
                 logger.warning("web_search unexpected for %r: %s", query, exc)
-                _CONSECUTIVE_EMPTY_SEARCHES[0] += 1
+                circuit.record(found_results=False)
                 return {**empty_summary, "status": "error", "reason": f"{type(exc).__name__}: {exc}"}
     except Exception as exc:  # httpx.AsyncClient construction failure
         logger.warning("web_search http client failed: %s", exc)
-        _CONSECUTIVE_EMPTY_SEARCHES[0] += 1
+        circuit.record(found_results=False)
         return {**empty_summary, "status": "error", "reason": f"{type(exc).__name__}: {exc}"}
 
-    if items:
-        _CONSECUTIVE_EMPTY_SEARCHES[0] = 0
-    else:
-        _CONSECUTIVE_EMPTY_SEARCHES[0] += 1
+    circuit.record(found_results=bool(items))
 
     path = write_search_to_state(items, query, settings.orchestrator_data_dir)
     result = {
@@ -173,7 +156,7 @@ async def _run_search(args: dict[str, Any], settings: Settings) -> dict[str, Any
         # Tell the researcher how close the circuit is to opening so it can
         # budget its own pivot instead of discovering it the hard way.
         result["reason"] = (
-            f"0 results ({_CONSECUTIVE_EMPTY_SEARCHES[0]}/{threshold} before "
+            f"0 results ({circuit.consecutive_empty}/{circuit.threshold} before "
             "search circuit opens); prefer web_extract on supporting_urls"
         )
     return result
@@ -196,13 +179,20 @@ def write_search_to_state(items: list[DiscoveredItem], query: str, data_dir: str
 
 
 def build_web_search_tool(settings: Settings | None = None) -> StructuredTool:
-    """Construct the web_search langchain tool (SearXNG-backed)."""
+    """Construct the web_search langchain tool (SearXNG-backed).
+
+    The circuit breaker is created here and closed over, so its lifetime is the
+    lifetime of this tool — one per run, no cross-run leakage, nothing to
+    reset."""
     bound_settings = settings
+    circuit = SearchCircuit(
+        (bound_settings or get_settings()).searxng_empty_circuit_breaker
+    )
 
     async def _async(query: str, hours_back: int | None = None, max_results: int | None = None) -> str:
         s = bound_settings or get_settings()
         result = await _run_search(
-            {"query": query, "hours_back": hours_back, "max_results": max_results}, s
+            {"query": query, "hours_back": hours_back, "max_results": max_results}, s, circuit
         )
         return json.dumps(result, default=str)
 

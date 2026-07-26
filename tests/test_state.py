@@ -58,87 +58,40 @@ def _settings(tmp_path: Path) -> Settings:
 
 
 # --------------------------------------------------------------------------- #
-# Path-convention parity: helpers must match the inline strings tools build.
+# Path convention. These names are the single definition every tool builds
+# from, so the tests pin the convention itself, not agreement between copies.
 # --------------------------------------------------------------------------- #
 
 
-def test_articles_path_matches_news_tool_filename() -> None:
-    """`articles_path` and `news.ARTICLES_FILENAME` must produce the same
-    filename — technical_rank imports the constant and reads that file."""
-    from app.orchestrator.tools.news import ARTICLES_FILENAME as tools_name
-
-    assert ARTICLES_FILENAME == tools_name == "articles.json"
-    assert articles_path("/d").name == ARTICLES_FILENAME
+def test_filename_convention() -> None:
+    assert articles_path("/d").name == ARTICLES_FILENAME == "articles.json"
+    assert topics_path("/d").name == TOPICS_FILENAME == "topics.json"
+    assert style_profile_path("/d").name == STYLE_PROFILE_FILENAME == "style_profile.json"
 
 
-def test_topics_path_matches_technical_rank_filename() -> None:
-    """`topics_path` and technical_rank's inline `_TOPICS_FILENAME` must
-    agree — drift would split the producer/consumer pair."""
-    from app.orchestrator.tools.technical_rank import _TOPICS_FILENAME
-
-    assert TOPICS_FILENAME == _TOPICS_FILENAME == "topics.json"
-    assert topics_path("/d").name == TOPICS_FILENAME
-
-
-def test_style_profile_path_matches_style_tool_filename() -> None:
-    """`style_profile_path` and `style.STYLE_PROFILE_FILENAME` must agree —
-    the writer subagent reads that exact file under the data dir."""
-    from app.orchestrator.tools.style import STYLE_PROFILE_FILENAME as tools_name
-
-    assert STYLE_PROFILE_FILENAME == tools_name == "style_profile.json"
-    assert style_profile_path("/d").name == STYLE_PROFILE_FILENAME
-
-
-def test_brief_path_matches_verify_claim_subdir_convention() -> None:
-    """`brief_path` and `verified_brief_path` live under the same `briefs/`
-    subdir verify_claim already writes to, with the same per-topic filename
-    pattern (``<topic_id>.json`` and ``<topic_id>.verified.json``)."""
-    from app.orchestrator.tools.verify_claim import (
-        _BRIEFS_SUBDIR,
-        _BRIEF_SUFFIX,
-        _VERIFIED_SUFFIX,
-    )
-
-    assert BRIEFS_DIRNAME == _BRIEFS_SUBDIR == "briefs"
-
+def test_brief_and_verified_brief_are_siblings_under_briefs() -> None:
+    """The verified copy lands *alongside* the original, not over it — that's
+    what lets a refusal name the pre-verification status."""
     bp = brief_path("climate-gpt", "/d")
-    assert bp == Path("/d") / BRIEFS_DIRNAME / f"climate-gpt{_BRIEF_SUFFIX}"
-
     vbp = verified_brief_path("climate-gpt", "/d")
-    assert vbp == Path("/d") / BRIEFS_DIRNAME / f"climate-gpt{_VERIFIED_SUFFIX}"
 
-    # Same parent, distinct filenames — verify's contract is "verified copy
-    # alongside the original", not "overwrite".
+    assert bp == Path("/d") / BRIEFS_DIRNAME / "climate-gpt.json"
+    assert vbp == Path("/d") / BRIEFS_DIRNAME / "climate-gpt.verified.json"
     assert bp.parent == vbp.parent
+    assert bp != vbp
     assert bp.name != vbp.name
 
 
-def test_draft_and_gate_paths_match_quality_tool_convention() -> None:
-    """`draft_path` / `gate_path` and the quality_gate tool's inline paths
-    must agree — coordinator-level delivery reads the same files the writer
-    subagent's quality_gate call writes.
-
-    Imports the quality tool's own constants (`_DRAFTS_SUBDIR`,
-    `_DRAFT_SUFFIX`, `_GATE_SUFFIX`) and pins the literal equality both
-    directions. Catches a rename in quality.py (e.g. ``_DRAFTS_SUBDIR =
-    "draft"`` typo, ``_GATE_SUFFIX = ".quality.json"``) that a one-direction
-    test against `state.DRAFTS_DIRNAME` would never surface."""
-    from app.orchestrator.tools.quality import (
-        _DRAFTS_SUBDIR,
-        _DRAFT_SUFFIX,
-        _GATE_SUFFIX,
-    )
-
-    assert DRAFTS_DIRNAME == _DRAFTS_SUBDIR == "drafts"
-    assert _DRAFT_SUFFIX == ".json"
-    assert _GATE_SUFFIX == ".gate.json"
-
+def test_draft_and_gate_are_siblings_under_drafts() -> None:
+    """Delivery reads the same files the writer's quality_gate call writes,
+    and the gate verdict never overwrites the draft it judges."""
     bp = draft_path("post-42", "/d")
     gp = gate_path("post-42", "/d")
-    assert bp == Path("/d") / _DRAFTS_SUBDIR / f"post-42{_DRAFT_SUFFIX}"
-    assert gp == Path("/d") / _DRAFTS_SUBDIR / f"post-42{_GATE_SUFFIX}"
+
+    assert bp == Path("/d") / DRAFTS_DIRNAME / "post-42.json"
+    assert gp == Path("/d") / DRAFTS_DIRNAME / "post-42.gate.json"
     assert bp.parent == gp.parent
-    assert bp.name != gp.name  # gate never overwrites the draft
+    assert bp.name != gp.name
 
 
 # --------------------------------------------------------------------------- #
@@ -222,7 +175,7 @@ def test_path_helpers_pass_whitespace_for_inline_guard_parity() -> None:
     """The inline guards in verify_claim and quality (`if "/" in topic_id or
     topic_id in {"", ".", ".."}`) do NOT reject whitespace-only ids. The
     module helper is parity-bound to that accepted set (see
-    ``_validate_slug``'s docstring) — accepting whitespace keeps the helper
+    ``validate_slug``'s docstring) — accepting whitespace keeps the helper
     symmetric to the inline guard so both sides write the same filename.
     Pinning this behavior protects the cross-tool visibility contract: a
     well-meaning future "tightening" that rejects whitespace here would

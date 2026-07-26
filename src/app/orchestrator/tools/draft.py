@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
 from app.orchestrator import state
-from app.orchestrator.schemas import PostProposal, ResearchBrief
+from app.orchestrator.schemas import PostProposal
 from app.orchestrator.services.evidence_floor import meets_evidence_floor
 from app.orchestrator.services.provenance import PROVENANCE_KEY, sign_draft
 
@@ -78,26 +78,6 @@ def write_signed_draft(
     return path
 
 
-def _load_brief_for_floor(
-    settings: Settings, topic_id: str
-) -> ResearchBrief | None:
-    """Load the brief behind a draft for the floor check. The verified copy
-    wins; the pre-verification copy is the fallback so the refusal reason can
-    name the actual status (``unverified``) instead of a bare 'missing'."""
-    data_dir = settings.orchestrator_data_dir
-    for path in (
-        state.verified_brief_path(topic_id, data_dir),
-        state.brief_path(topic_id, data_dir),
-    ):
-        if path.exists():
-            try:
-                return ResearchBrief.model_validate_json(path.read_text(encoding="utf-8"))
-            except Exception as exc:
-                logger.warning("submit_draft brief load failed at %s: %s", path, exc)
-                return None
-    return None
-
-
 async def _submit_and_write(args: dict[str, Any], settings: Settings) -> dict[str, Any]:
     """Validate + floor-check + sign + write one draft. Returns a compressed
     summary; every failure mode is structured (never raises into the agent
@@ -136,7 +116,7 @@ async def _submit_and_write(args: dict[str, Any], settings: Settings) -> dict[st
             error=f"expected exactly one supporting_topic_id, got {len(proposal.supporting_topic_ids)}",
         )
     topic_id = proposal.supporting_topic_ids[0]
-    brief = _load_brief_for_floor(settings, topic_id)
+    brief = state.read_brief(topic_id, settings.orchestrator_data_dir)
     if brief is None:
         return failure(
             "verification_floor",

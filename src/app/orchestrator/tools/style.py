@@ -41,12 +41,12 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
+from app.orchestrator import state
 from app.orchestrator.schemas import StyleProfile
 from app.orchestrator.services import style_profile as style_service
 
 logger = logging.getLogger(__name__)
 
-STYLE_PROFILE_FILENAME = "style_profile.json"
 
 
 class LoadStyleProfileArgs(BaseModel):
@@ -71,7 +71,7 @@ def write_profile_to_state(profile: StyleProfile, data_dir: str) -> Path:
     StyleProfile->JSON encoding lives in exactly one place; the tool owns only
     the path convention + log. Mirrors the news.py / quality.py state writers."""
     path = style_service.save_profile(
-        profile, Path(data_dir) / STYLE_PROFILE_FILENAME
+        profile, state.style_profile_path(data_dir)
     )
     logger.info(
         "Wrote style profile (samples=%d) to %s", profile.sample_count, path
@@ -94,10 +94,14 @@ def _resolve_profile(rebuild: bool, settings: Settings) -> tuple[StyleProfile, s
     return style_service.default_profile(), "default"
 
 
-async def _load_and_write(rebuild: bool, settings: Settings) -> dict[str, Any]:
+async def resolve_style_profile(*, rebuild: bool, settings: Settings) -> dict[str, Any]:
     """Resolve the profile, persist it to state, and return a compressed
     summary. Any failure surfaces as ``status=error`` so the LLM sees a
-    structured result, not a raise into the agent loop."""
+    structured result, not a raise into the agent loop.
+
+    Public because the run lifecycle (:mod:`app.runtime.workspace`) resolves the
+    profile up front so the writer never reads a missing file — the tool
+    wrapper below and that caller share this one implementation."""
     failure: dict[str, Any] = {
         "source": "rebuilt" if rebuild else "loaded",
         "sample_count": 0,
@@ -136,7 +140,7 @@ def build_load_style_profile_tool(settings: Settings | None = None) -> Structure
 
     async def _async(rebuild: bool = False) -> str:
         s = bound_settings or get_settings()
-        result = await _load_and_write(rebuild, s)
+        result = await resolve_style_profile(rebuild=rebuild, settings=s)
         return json.dumps(result, default=str)
 
     return StructuredTool.from_function(

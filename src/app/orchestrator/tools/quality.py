@@ -28,6 +28,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
+from app.orchestrator import state
 from app.orchestrator.schemas import PostProposal, ResearchBrief
 from app.orchestrator.services.quality_gate import (
     QualityResult,
@@ -36,10 +37,6 @@ from app.orchestrator.services.quality_gate import (
 )
 
 logger = logging.getLogger(__name__)
-
-_DRAFTS_SUBDIR = "drafts"
-_GATE_SUFFIX = ".gate.json"
-_DRAFT_SUFFIX = ".json"
 
 
 class QualityGateArgs(BaseModel):
@@ -54,19 +51,6 @@ class QualityGateArgs(BaseModel):
     )
 
 
-def _draft_path(data_dir: str, post_id: str, *, gate: bool = False) -> Path:
-    """Resolve the on-disk path for a draft or its gate verdict. ``gate=True``
-    returns ``drafts/<post_id>.gate.json`` — the artifact the coordinator reads
-    to decide retry-vs-deliver."""
-    if "/" in post_id or post_id in {"", ".", ".."}:
-        # Defense-in-depth against a model-supplied post_id escaping the
-        # drafts/ subdir via path traversal. Surfaces as `status=error` in the
-        # tool summary so the LLM sees a structured failure, not a raise.
-        raise ValueError(f"Invalid post_id: {post_id!r}")
-    suffix = _GATE_SUFFIX if gate else _DRAFT_SUFFIX
-    return Path(data_dir) / _DRAFTS_SUBDIR / f"{post_id}{suffix}"
-
-
 def read_proposal_from_state(data_dir: str, post_id: str) -> PostProposal:
     """Load the writer-written draft into a :class:`PostProposal`. Raises
     ``FileNotFoundError`` deliberately — a missing draft is a precondition
@@ -75,34 +59,17 @@ def read_proposal_from_state(data_dir: str, post_id: str) -> PostProposal:
     Re-validation through pydantic on load is the boundary check that catches
     a draft on disk that drifted from the boundary contract before it reaches
     the gate."""
-    path = _draft_path(data_dir, post_id)
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(state.draft_path(post_id, data_dir).read_text(encoding="utf-8"))
     return PostProposal.model_validate(payload)
 
 
 def _load_brief_for_fidelity(data_dir: str, proposal: PostProposal) -> ResearchBrief | None:
-    """Load the brief behind a draft for the citation-fidelity check. The
-    verified copy wins (it's the post-verification state the writer cited
-    from); the pre-verification copy is the fallback. Returns None when no
-    readable brief exists — the fidelity check turns that into a failure
-    reason, not a silent pass."""
+    """Load the brief behind a draft for the citation-fidelity check. Returns
+    None when the draft names no topic or no readable brief exists — the
+    fidelity check turns that into a failure reason, not a silent pass."""
     if not proposal.supporting_topic_ids:
         return None
-    topic_id = proposal.supporting_topic_ids[0]
-    if "/" in topic_id or topic_id in {"", ".", ".."}:
-        return None
-    briefs_dir = Path(data_dir) / "briefs"
-    for path in (
-        briefs_dir / f"{topic_id}.verified.json",
-        briefs_dir / f"{topic_id}.json",
-    ):
-        if path.exists():
-            try:
-                return ResearchBrief.model_validate_json(path.read_text(encoding="utf-8"))
-            except Exception as exc:
-                logger.warning("quality_gate brief load failed at %s: %s", path, exc)
-                return None
-    return None
+    return state.read_brief(proposal.supporting_topic_ids[0], data_dir)
 
 
 def write_gate_to_state(result: QualityResult, post_id: str, data_dir: str) -> Path:
@@ -113,9 +80,7 @@ def write_gate_to_state(result: QualityResult, post_id: str, data_dir: str) -> P
     :class:`QualityResult` via a JSON dump + the dataclass's ``asdict``."""
     from dataclasses import asdict
 
-    if "/" in post_id or post_id in {"", ".", ".."}:
-        raise ValueError(f"Invalid post_id: {post_id!r}")
-    path = _draft_path(data_dir, post_id, gate=True)
+    path = state.gate_path(post_id, data_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(asdict(result), indent=2, default=str),

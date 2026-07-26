@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app import main as main_module
+from app import curation as curation_module
 from app.orchestrator.schemas import CuratedArticle
 from app.schemas.article import Article, serialize_articles
 
@@ -35,9 +35,9 @@ async def test_run_curation_returns_curated_articles_from_final_state(monkeypatc
     fake_workflow = _FakeCurationWorkflow(
         {"articles_selected": serialize_articles([article]), "errors": []}
     )
-    monkeypatch.setattr(main_module, "build_curation_workflow", lambda: fake_workflow)
+    monkeypatch.setattr(curation_module, "build_curation_workflow", lambda: fake_workflow)
 
-    articles, effective_limit = await main_module.run_curation(limit=5)
+    articles, effective_limit = await curation_module.run_curation(limit=5)
 
     assert len(articles) == 1
     assert isinstance(articles[0], CuratedArticle)
@@ -50,22 +50,22 @@ async def test_run_curation_returns_curated_articles_from_final_state(monkeypatc
 
 async def test_run_curation_defaults_limit_to_settings_max(monkeypatch) -> None:
     fake_workflow = _FakeCurationWorkflow({"articles_selected": []})
-    monkeypatch.setattr(main_module, "build_curation_workflow", lambda: fake_workflow)
+    monkeypatch.setattr(curation_module, "build_curation_workflow", lambda: fake_workflow)
 
-    articles, effective_limit = await main_module.run_curation()
+    articles, effective_limit = await curation_module.run_curation()
 
     assert articles == []
-    assert fake_workflow.received_state["limit"] == main_module.get_settings().max_articles_per_run
-    assert effective_limit == main_module.get_settings().max_articles_per_run
+    assert fake_workflow.received_state["limit"] == curation_module.get_settings().max_articles_per_run
+    assert effective_limit == curation_module.get_settings().max_articles_per_run
 
 
 async def test_run_curation_clamps_limit_to_settings_max(monkeypatch) -> None:
     """A programmatic caller can't bypass the cap the CLI enforces."""
     fake_workflow = _FakeCurationWorkflow({"articles_selected": []})
-    monkeypatch.setattr(main_module, "build_curation_workflow", lambda: fake_workflow)
+    monkeypatch.setattr(curation_module, "build_curation_workflow", lambda: fake_workflow)
 
-    cap = main_module.get_settings().max_articles_per_run
-    articles, effective_limit = await main_module.run_curation(limit=cap + 10_000)
+    cap = curation_module.get_settings().max_articles_per_run
+    articles, effective_limit = await curation_module.run_curation(limit=cap + 10_000)
 
     assert fake_workflow.received_state["limit"] == cap
     assert effective_limit == cap
@@ -78,12 +78,12 @@ async def test_run_curation_uses_injected_settings_not_lru_cache(monkeypatch) ->
     limit reconstructed from one Settings instance while run_curation clamped
     using another."""
     fake_workflow = _FakeCurationWorkflow({"articles_selected": []})
-    monkeypatch.setattr(main_module, "build_curation_workflow", lambda: fake_workflow)
+    monkeypatch.setattr(curation_module, "build_curation_workflow", lambda: fake_workflow)
 
     from app.config import Settings
 
     injected = Settings(_env_file=None, max_articles_per_run=3)
-    articles, effective_limit = await main_module.run_curation(
+    articles, effective_limit = await curation_module.run_curation(
         limit=10_000, settings=injected
     )
 

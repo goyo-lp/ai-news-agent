@@ -10,8 +10,8 @@ import pytest
 from app.config import Settings
 from app.orchestrator.schemas import StyleProfile
 from app.orchestrator.services import style_profile as svc
+from app.orchestrator.state import STYLE_PROFILE_FILENAME
 from app.orchestrator.tools.style import (
-    STYLE_PROFILE_FILENAME,
     build_load_style_profile_tool,
     load_style_profile_tool,
     write_profile_to_state,

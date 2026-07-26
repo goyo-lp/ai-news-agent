@@ -34,7 +34,7 @@ from app.orchestrator.services.ranking import (
     rank_topics,
 )
 from app.orchestrator.services.technical_ranker import TechnicalRanker
-from e2e_support import CLEAN_GATE_BODY
+from support import CLEAN_GATE_BODY
 
 
 def _proposal(

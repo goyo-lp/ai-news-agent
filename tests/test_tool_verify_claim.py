@@ -213,7 +213,7 @@ async def test_tool_path_traversal_topic_id_returns_error_without_writing(
 
     assert result["status"] == "error"
     assert result["path"] is None
-    assert "invalid topic_id" in result["reason"].lower()
+    assert "topic_id" in result["reason"].lower()
 
 def test_default_singleton_is_a_structured_tool() -> None:
     assert verify_claim_tool.name == "verify_claim"

@@ -15,41 +15,43 @@ docstrings from P4 — this module only adds what was missing:
    real repo, same contract P4.2's writer subagent already relies on).
 2. Filename / subdir constants + path helpers (``articles_path``,
    ``topics_path``, ``brief_path``, ``verified_brief_path``, ``draft_path``,
-   ``gate_path``, ``style_profile_path``) — the forward-going source of
-   truth for *where on the filesystem* structured data lives (guiding
-   principle #3). The parity tests pin agreement with the inline strings
-   the existing tools (news, technical_rank, verify_claim, quality, style)
-   already build, so the inline strings can't silently drift; adopting the
-   helpers per-tool is incremental and out of this PR's LOC budget.
-3. ``_validate_slug`` — single path-traversal guard reused by every
-   ``*_path`` builder that takes an externally supplied id (topic_id /
-   post_id). The custom tools already guard inline; this module is the
-   forward-going single source so a new helper can't forget it. The guard
-   mirrors the inline rules in ``verify_claim`` / ``quality`` exactly; see
-   its docstring for the parity guarantee.
+   ``gate_path``, ``style_profile_path``) — the single source of truth for
+   *where on the filesystem* structured data lives (guiding principle #3).
+   Every tool builds its paths through these; none carries its own copy of a
+   filename string.
+3. ``validate_slug`` — the one path-traversal guard, used by every ``*_path``
+   builder that takes an externally supplied id (topic_id / post_id), so a new
+   builder cannot forget it.
+4. ``read_brief`` — resolve-and-parse for a topic's brief, preferring the
+   verified copy. Three tools (submit_draft, quality_gate, deliver_telegram)
+   need it; keeping it here means the "verified wins, unverified is the
+   fallback" rule lives with the convention that defines both paths.
 
 Scope-out (honest): the fetch_article tool writes its per-URL artifact to
 ``<data_dir>/articles/<slug>.json`` (``fetch._ARTICLES_SUBDIR = "articles"``)
-— a distinct subdir from ``articles.json`` (the curated snapshot). That
-subdir is part of the convention, but no helper + no parity test exists for
-it yet; adopting it lives with a future refactor of ``fetch.py`` onto these
-helpers, not in this PR's scope. Documented here so the omission isn't
-inferred."""
+— a distinct subdir from ``articles.json`` (the curated snapshot). That subdir
+is part of the convention but has no helper here yet; adopting it lives with a
+future refactor of ``fetch.py``. Documented so the omission isn't inferred."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from deepagents.backends.filesystem import FilesystemBackend
 
 from app.config import Settings, get_settings
 
+if TYPE_CHECKING:
+    from app.orchestrator.schemas import ResearchBrief
+
+logger = logging.getLogger(__name__)
+
 # --------------------------------------------------------------------------- #
 # Filename / subdir convention (single source of truth)
 # --------------------------------------------------------------------------- #
-# These names are the literal filenames the deterministic tools already write.
-# Centralizing them here lets the parity test catch any drift between an
-# inline-string tool and this convention; a future refactor can swap each tool's
-# inline string for ``state.X`` one-by-one without breaking the contract.
+# The literal filenames the deterministic tools read and write. Defined once
+# here and referenced everywhere else, so a rename is a one-line change.
 
 ARTICLES_FILENAME = "articles.json"
 TOPICS_FILENAME = "topics.json"
@@ -59,32 +61,21 @@ BRIEFS_DIRNAME = "briefs"
 DRAFTS_DIRNAME = "drafts"
 
 
-def _validate_slug(slug: str, *, kind: str) -> str:
+def validate_slug(slug: str, *, kind: str) -> str:
     """Reject any externally supplied id that could escape its dir.
 
-    The custom tools (verify_claim, quality_gate) each guard this inline; this
-    helper is the forward-going single source so a new ``*_path`` builder can't
-    forget it.
-
-    Parity: mirrors the inline guards in ``verify_claim._brief_file_path`` and
-    ``quality._draft_path`` *literally* — no normalization, no whitespace
-    stripping. A slug with leading/trailing whitespace passes both the inline
-    guard and this one; the resulting filename carries that whitespace on both
-    sides (symmetric, both sides see the same file). Adding ``.strip()`` here
-    would make this helper asymmetric to the inline guards and silently
-    produce a different filename than the custom tools (e.g.
-    ``" foo "`` -> ``"foo.json"`` here while the inline guard writes
-    ``" foo .json"``). That asymmetry would *break* the cross-tool visibility
-    contract, so the helper does not strip.
+    Deliberately does no normalization and no whitespace stripping: a slug is
+    used verbatim to build a filename, so every caller must see the same file
+    for the same input. Stripping here would make a ``" foo "`` id resolve to
+    ``foo.json`` for one caller and ``" foo .json"`` for another, breaking the
+    cross-tool visibility contract that the shared data dir depends on.
     """
     if not slug or slug in {"", ".", ".."}:
         raise ValueError(f"{kind} slug is empty or a path metacharacter: {slug!r}")
     if "/" in slug:
         raise ValueError(f"{kind} slug must not contain '/': {slug!r}")
     # ``..`` as a *component* (e.g. ``foo/..``) is caught by the ``/`` rule
-    # above; ``..`` as a *bare slug* is caught by the explicit set. This
-    # leaves ``.`` and ``..`` already covered and keeps the helper's accepted
-    # set exactly equal to the inline guards' accepted set.
+    # above; ``..`` as a *bare slug* is caught by the explicit set.
     return slug
 
 
@@ -101,8 +92,8 @@ def topics_path(data_dir: str | Path) -> Path:
 
 
 def style_profile_path(data_dir: str | Path) -> Path:
-    """``<data_dir>/style_profile.json`` — the seed style profile the writer
-    subagent reads. Mirrors ``STYLE_PROFILE_FILENAME`` in tools/style.py."""
+    """``<data_dir>/style_profile.json`` — the style profile the writer subagent
+    reads."""
     return Path(data_dir) / STYLE_PROFILE_FILENAME
 
 
@@ -110,7 +101,7 @@ def brief_path(topic_id: str, data_dir: str | Path) -> Path:
     """``<data_dir>/briefs/<topic_id>.json`` — the authored ResearchBrief the
     research subagent writes with ``write_file`` and verify_claim reads via
     stdlib. Path-traversal-guarded at the topic_id."""
-    return Path(data_dir) / BRIEFS_DIRNAME / f"{_validate_slug(topic_id, kind='topic_id')}.json"
+    return Path(data_dir) / BRIEFS_DIRNAME / f"{validate_slug(topic_id, kind='topic_id')}.json"
 
 
 def verified_brief_path(topic_id: str, data_dir: str | Path) -> Path:
@@ -120,7 +111,7 @@ def verified_brief_path(topic_id: str, data_dir: str | Path) -> Path:
     return (
         Path(data_dir)
         / BRIEFS_DIRNAME
-        / f"{_validate_slug(topic_id, kind='topic_id')}.verified.json"
+        / f"{validate_slug(topic_id, kind='topic_id')}.verified.json"
     )
 
 
@@ -128,7 +119,7 @@ def draft_path(post_id: str, data_dir: str | Path) -> Path:
     """``<data_dir>/drafts/<post_id>.json`` — the drafted PostProposal the
     writer subagent writes and quality_gate reads. Path-traversal-guarded at
     the post_id."""
-    return Path(data_dir) / DRAFTS_DIRNAME / f"{_validate_slug(post_id, kind='post_id')}.json"
+    return Path(data_dir) / DRAFTS_DIRNAME / f"{validate_slug(post_id, kind='post_id')}.json"
 
 
 def gate_path(post_id: str, data_dir: str | Path) -> Path:
@@ -138,8 +129,36 @@ def gate_path(post_id: str, data_dir: str | Path) -> Path:
     return (
         Path(data_dir)
         / DRAFTS_DIRNAME
-        / f"{_validate_slug(post_id, kind='post_id')}.gate.json"
+        / f"{validate_slug(post_id, kind='post_id')}.gate.json"
     )
+
+
+def read_brief(topic_id: str, data_dir: str | Path) -> "ResearchBrief | None":
+    """Load the brief behind a topic, preferring the verified copy.
+
+    The unverified copy is the deliberate fallback rather than a miss, so a
+    caller refusing the brief can name the actual status (``unverified``)
+    instead of reporting a bare "missing". Returns ``None`` when neither file
+    exists, when the id is invalid, or when the payload doesn't parse — every
+    caller treats all three as "no usable evidence" and fails closed.
+    """
+    from app.orchestrator.schemas import ResearchBrief
+
+    try:
+        candidates = (
+            verified_brief_path(topic_id, data_dir),
+            brief_path(topic_id, data_dir),
+        )
+    except ValueError:
+        return None
+    for path in candidates:
+        if path.exists():
+            try:
+                return ResearchBrief.model_validate_json(path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                logger.warning("brief load failed at %s: %s", path, exc)
+                return None
+    return None
 
 
 # --------------------------------------------------------------------------- #

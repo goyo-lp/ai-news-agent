@@ -17,9 +17,10 @@ the coordinator mechanically followed its 7-step pipeline — then skipped the
 writer-subagent entirely, authored all five drafts itself via ``write_file``,
 and self-gated them. A planner that adds no judgment over a script while
 needing its guardrails babysat in prose is not an agent; it's an expensive,
-flaky state machine. This module is the cheap, reliable state machine. The
-legacy LLM-coordinator path remains available via ``propose
---legacy-coordinator`` for comparison.
+flaky state machine. This module is the cheap, reliable state machine, and the
+only propose path.
+
+The run's outcome shape lives in :mod:`app.orchestrator.spine_result`.
 """
 from __future__ import annotations
 
@@ -35,12 +36,17 @@ from langsmith import traceable
 from app.config import Settings
 from app.orchestrator import state
 from app.orchestrator.schemas import ResearchBrief, TopicCandidate
+from app.orchestrator.spine_result import (
+    SelectedTopic,
+    SkippedTopic,
+    SpineResult,
+    TaskOutcome,
+    WrittenPost,
+)
 from app.orchestrator.services.editor_veto import veto_irrelevant_topics
 from app.orchestrator.services.evidence_floor import meets_evidence_floor
 from app.orchestrator.subagents.research import build_research_agent
 from app.orchestrator.subagents.writer import build_writer_agent
-from app.orchestrator.tools import verify_claim as verify_claim_tool_mod
-from app.orchestrator.tools import web as web_tool_mod
 from app.orchestrator.tools.news import build_fetch_curated_ai_news_tool
 from app.orchestrator.tools.technical_rank import build_technical_rank_tool
 
@@ -230,72 +236,58 @@ async def run_propose_spine(
     limit: int | None = None,
     research_agent: _AgentLike | None = None,
     writer_agent: _AgentLike | None = None,
-) -> dict[str, Any]:
+) -> SpineResult:
     """Run the deterministic propose pipeline for one run.
 
     ``research_agent`` / ``writer_agent`` are the test seam: compiled deep
     agents are built from ``settings`` when not supplied; tests inject
-    scripted stubs implementing ``ainvoke``. Returns a structured run
-    summary (also logged); the artifacts themselves land on disk under the
-    orchestrator data dir, exactly as the LLM-coordinator path produced
-    them, so export + delivery are unchanged.
+    scripted stubs implementing ``ainvoke``. Returns the run summary (also
+    logged); the artifacts themselves land on disk under the orchestrator data
+    dir, so export + delivery read them from there.
     """
-    summary: dict[str, Any] = {
-        "run_id": run_id,
-        "fetched": 0,
-        "topics": 0,
-        "vetoed": [],
-        "selected": [],
-        "research": [],
-        "skipped_floor": [],
-        "written": [],
-        "drafts_passed": 0,
-    }
+    result = SpineResult(run_id=run_id, status="ok")
 
-    # One-process-one-run hygiene: reset the tool-layer churn guards so a
-    # prior invocation in this process (tests, `both` re-entry) can't leak
-    # budget into this run.
-    verify_claim_tool_mod._reset_attempt_counters()
-    web_tool_mod._reset_search_circuit()
-
-    # 1. Fetch + 2. Rank — the same deterministic tools the coordinator
-    # called, driven from code (no planner tokens spent sequencing them).
+    # 1. Fetch + 2. Rank — deterministic tools driven from code (no planner
+    # tokens spent sequencing them).
     fetch_tool = build_fetch_curated_ai_news_tool(settings)
-    fetch_result = json.loads(await fetch_tool.ainvoke({"limit": limit}))
-    summary["fetched"] = int(fetch_result.get("count", 0))
-    if summary["fetched"] == 0:
-        summary["status"] = "no_articles"
-        return summary
+    fetch_summary = json.loads(await fetch_tool.ainvoke({"limit": limit}))
+    result.fetched = int(fetch_summary.get("count", 0))
+    if result.fetched == 0:
+        result.status = "no_articles"
+        return result
 
     rank_tool = build_technical_rank_tool(settings)
-    rank_result = json.loads(await rank_tool.ainvoke({}))
-    if rank_result.get("status") == "error":
-        summary["status"] = "rank_failed"
-        summary["error"] = rank_result.get("reason")
-        return summary
+    rank_summary = json.loads(await rank_tool.ainvoke({}))
+    if rank_summary.get("status") == "error":
+        result.status = "rank_failed"
+        result.error = rank_summary.get("reason")
+        return result
 
     topics = _read_topics(settings)
-    summary["topics"] = len(topics)
+    result.topics = len(topics)
     if not topics:
-        summary["status"] = "no_topics"
-        return summary
+        result.status = "no_topics"
+        return result
 
     # 3. Editorial veto over the whole pool (one batched LLM call, fail-open),
     # then deterministic diversity-aware selection under the cap — the cap is
     # enforced HERE, in code, not in a prompt.
-    dry_run = not (settings.openrouter_api_key or "").strip()
-    pool, vetoes = await veto_irrelevant_topics(topics, settings, dry_run=dry_run)
-    summary["vetoed"] = vetoes
+    llm_unavailable = not (settings.openrouter_api_key or "").strip()
+    pool, vetoes = await veto_irrelevant_topics(
+        topics, settings, dry_run=llm_unavailable
+    )
+    result.vetoed = vetoes
 
-    cap = max(1, settings.max_topics_per_run)
-    selected = select_topics(pool, cap)
-    summary["selected"] = [
-        {"topic_id": t.topic_id, "title": t.title, "domain": t.primary_domain, "score": t.score}
+    selected = select_topics(pool, max(1, settings.max_topics_per_run))
+    result.selected = [
+        SelectedTopic(
+            topic_id=t.topic_id, title=t.title, domain=t.primary_domain, score=t.score
+        )
         for t in selected
     ]
     if not selected:
-        summary["status"] = "no_selection"
-        return summary
+        result.status = "no_selection"
+        return result
 
     # 4. Research fan-out — concurrent, each task hard-bounded by
     # research_task_timeout_seconds. This is the code-side enforcement the
@@ -312,8 +304,8 @@ async def run_propose_spine(
             for topic in selected
         )
     )
-    summary["research"] = [
-        {"topic_id": r["topic_id"], "status": r["status"]} for r in research_results
+    result.research = [
+        TaskOutcome(topic_id=r["topic_id"], status=r["status"]) for r in research_results
     ]
 
     # 5. Evidence floor — only floored topics may be drafted. This is the
@@ -323,20 +315,20 @@ async def run_propose_spine(
     for topic in selected:
         brief = _read_verified_brief(settings, topic.topic_id)
         if brief is None:
-            summary["skipped_floor"].append(
-                {"topic_id": topic.topic_id, "reason": "no verified brief"}
+            result.skipped_floor.append(
+                SkippedTopic(topic_id=topic.topic_id, reason="no verified brief")
             )
             continue
         passes, why = meets_evidence_floor(brief, settings)
         if passes:
             writable.append(topic)
         else:
-            summary["skipped_floor"].append(
-                {"topic_id": topic.topic_id, "reason": why}
+            result.skipped_floor.append(
+                SkippedTopic(topic_id=topic.topic_id, reason=why)
             )
     if not writable:
-        summary["status"] = "nothing_above_floor"
-        return summary
+        result.status = "nothing_above_floor"
+        return result
 
     # 6. Writer fan-out — concurrent, hard-bounded, deterministic post_ids.
     writer = writer_agent or build_writer_agent(settings)
@@ -357,7 +349,7 @@ async def run_propose_spine(
 
     # 7. Verify each draft's gate verdict from disk (the delivery layer
     # re-checks everything anyway; this is the run summary's honesty check).
-    for (topic, post_id), result in zip(assignments, write_results):
+    for (topic, post_id), outcome in zip(assignments, write_results):
         gate_passed = False
         try:
             gate_file = state.gate_path(post_id, settings.orchestrator_data_dir)
@@ -366,27 +358,30 @@ async def run_propose_spine(
                 gate_passed = verdict.get("passed") is True
         except Exception as exc:
             logger.warning("spine: gate read failed for %s: %s", post_id, exc)
-        summary["written"].append(
-            {
-                "topic_id": topic.topic_id,
-                "post_id": post_id,
-                "writer_status": result["status"],
-                "gate_passed": gate_passed,
-            }
+        result.written.append(
+            WrittenPost(
+                topic_id=topic.topic_id,
+                post_id=post_id,
+                writer_status=outcome["status"],
+                gate_passed=gate_passed,
+            )
         )
-    summary["drafts_passed"] = sum(1 for w in summary["written"] if w["gate_passed"])
-    summary["status"] = "ok"
     logger.info(
         "spine complete: %d fetched, %d topics, %d selected, %d vetoed, %d floored-out, %d/%d drafts gated",
-        summary["fetched"],
-        summary["topics"],
-        len(summary["selected"]),
-        len(summary["vetoed"]),
-        len(summary["skipped_floor"]),
-        summary["drafts_passed"],
-        len(summary["written"]),
+        result.fetched,
+        result.topics,
+        len(result.selected),
+        len(result.vetoed),
+        len(result.skipped_floor),
+        result.drafts_passed,
+        len(result.written),
     )
-    return summary
+    return result
 
 
-__all__ = ["post_id_for", "run_propose_spine", "select_topics"]
+__all__ = [
+    "SpineResult",
+    "post_id_for",
+    "run_propose_spine",
+    "select_topics",
+]

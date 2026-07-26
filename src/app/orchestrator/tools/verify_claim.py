@@ -36,14 +36,12 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
+from app.orchestrator.budgets import AttemptBudget
+from app.orchestrator import state
 from app.orchestrator.schemas import ResearchBrief
 from app.orchestrator.services.brief_verifier import BriefVerifier
 
 logger = logging.getLogger(__name__)
-
-_BRIEFS_SUBDIR = "briefs"
-_VERIFIED_SUFFIX = ".verified.json"
-_BRIEF_SUFFIX = ".json"
 
 _VALID_STATUSES = {
     "unverified",
@@ -52,21 +50,6 @@ _VALID_STATUSES = {
     "insufficient_evidence",
     "failed",
 }
-
-# Per-topic attempt budget, process-local. The 2026-07-25 production trace
-# showed the research subagent calling verify_claim 16x across 5 topics (one
-# call 94s) in a soften-and-reverify churn loop when corroboration was thin.
-# Verification spend is now bounded in code — the prompt's "re-verify ONCE"
-# guidance is defense-in-depth, this counter is the mechanism. Keyed by
-# topic_id; one CLI run = one process, so cross-run leakage is a non-issue
-# (and tests reset explicitly).
-_ATTEMPT_COUNTERS: dict[str, int] = {}
-
-
-def _reset_attempt_counters() -> None:
-    """Test seam: clear the per-topic attempt budget between tests."""
-    _ATTEMPT_COUNTERS.clear()
-
 
 class VerifyClaimArgs(BaseModel):
     """Tool input. `topic_id` identifies the brief file to load (looks up
@@ -85,27 +68,16 @@ class VerifyClaimArgs(BaseModel):
     )
 
 
-def _brief_path(data_dir: str, topic_id: str, *, verified: bool = False) -> Path:
-    """Resolve the on-disk path for a brief, by topic_id. ``verified=True``
-    returns the post-verification copy (``briefs/<topic_id>.verified.json``)
-    — the artifact the writer subagent / quality_gate reads."""
-    if "/" in topic_id or topic_id in {"", ".", ".."}:
-        # Defense-in-depth against a model-supplied topic_id escaping the
-        # briefs/ subdir via path traversal. The caller can also see this
-        # reflected as `status=error` in the tool summary.
-        raise ValueError(f"Invalid topic_id: {topic_id!r}")
-    filename = f"{topic_id}{_VERIFIED_SUFFIX if verified else _BRIEF_SUFFIX}"
-    return Path(data_dir) / _BRIEFS_SUBDIR / filename
-
-
 def write_verified_brief_to_state(brief: ResearchBrief, data_dir: str) -> Path:
     """Serialize a verified brief to ``briefs/<topic_id>.verified.json`` and
     return the written path. Creates the dir if missing. Pure (no network):
     testable with a tmp directory. Mirrors the news.py / technical_rank.py
-    writers — the on-disk shape round-trips through ``ResearchBrief``."""
-    if "/" in brief.topic_id or brief.topic_id in {"", ".", ".."}:
-        raise ValueError(f"Invalid topic_id: {brief.topic_id!r}")
-    path = _brief_path(data_dir, brief.topic_id, verified=True)
+    writers — the on-disk shape round-trips through ``ResearchBrief``.
+
+    Path-traversal on the topic_id is guarded by ``state.verified_brief_path``,
+    which raises ``ValueError`` — the caller surfaces that as ``status=error``
+    in the tool summary."""
+    path = state.verified_brief_path(brief.topic_id, data_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(brief.model_dump(mode="json"), indent=2, default=str),
@@ -130,12 +102,13 @@ def read_brief_from_state(data_dir: str, topic_id: str) -> ResearchBrief:
     Re-validation through pydantic on load is the boundary check that catches
     a brief on disk that drifted from the boundary contract (someone hand-edited
     it, the writer produced a stale shape) before it reaches the verifier."""
-    path = _brief_path(data_dir, topic_id, verified=False)
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(state.brief_path(topic_id, data_dir).read_text(encoding="utf-8"))
     return ResearchBrief.model_validate(payload)
 
 
-async def _verify_and_write(args: dict[str, Any], settings: Settings) -> dict[str, Any]:
+async def _verify_and_write(
+    args: dict[str, Any], settings: Settings, budget: AttemptBudget
+) -> dict[str, Any]:
     """Run the verifier on one brief and persist the verified copy. Returns a
     compressed summary; the brief body never rides back through the LLM."""
     raw_topic = str(args.get("topic_id") or "").strip()
@@ -191,23 +164,14 @@ async def _verify_and_write(args: dict[str, Any], settings: Settings) -> dict[st
 
     # Attempt budget: refuse churn before spending. Checked after the brief
     # load so a missing brief doesn't burn an attempt.
-    max_attempts = max(1, settings.verification_max_attempts)
-    attempts = _ATTEMPT_COUNTERS.get(raw_topic, 0)
-    if attempts >= max_attempts:
+    if budget.exhausted(raw_topic):
         # Surface the last known verdict so the subagent can finish honestly.
+        verified_path = state.verified_brief_path(raw_topic, settings.orchestrator_data_dir)
         last_status, last_confidence = "unknown", 0.0
-        verified_path = _brief_path(
-            settings.orchestrator_data_dir, raw_topic, verified=True
-        )
-        if verified_path.exists():
-            try:
-                last = ResearchBrief.model_validate_json(
-                    verified_path.read_text(encoding="utf-8")
-                )
-                last_status = last.verification_status
-                last_confidence = last.verification_confidence
-            except Exception:
-                pass
+        last = state.read_brief(raw_topic, settings.orchestrator_data_dir)
+        if last is not None:
+            last_status = last.verification_status
+            last_confidence = last.verification_confidence
         return {
             "topic_id": raw_topic,
             "verification_status": last_status,
@@ -215,12 +179,12 @@ async def _verify_and_write(args: dict[str, Any], settings: Settings) -> dict[st
             "notes_count": 0,
             "status": "attempts_exhausted",
             "reason": (
-                f"verification attempt budget exhausted ({max_attempts} per "
+                f"verification attempt budget exhausted ({budget.max_attempts} per "
                 "topic); stop re-verifying and report the verdict you have"
             ),
             "path": str(verified_path) if verified_path.exists() else None,
         }
-    _ATTEMPT_COUNTERS[raw_topic] = attempts + 1
+    budget.record_attempt(raw_topic)
 
     verifier = BriefVerifier(settings)
     try:
@@ -280,13 +244,25 @@ async def _verify_and_write(args: dict[str, Any], settings: Settings) -> dict[st
 
 
 def build_verify_claim_tool(settings: Settings | None = None) -> StructuredTool:
-    """Construct the verify_claim langchain tool."""
+    """Construct the verify_claim langchain tool.
+
+    The per-topic attempt budget is created here and closed over: its lifetime
+    is this tool's lifetime — one per run — so nothing has to reset it, and two
+    lanes in one process can't share a budget.
+
+    The 2026-07-25 production trace showed the research subagent calling
+    verify_claim 16x across 5 topics (one call 94s) in a soften-and-reverify
+    churn loop when corroboration was thin. The prompt's "re-verify ONCE"
+    guidance is defense-in-depth; this budget is the mechanism."""
     bound_settings = settings
+    budget = AttemptBudget(
+        (bound_settings or get_settings()).verification_max_attempts
+    )
 
     async def _async(topic_id: str, hours_back: int | None = None) -> str:
         s = bound_settings or get_settings()
         result = await _verify_and_write(
-            {"topic_id": topic_id, "hours_back": hours_back}, s
+            {"topic_id": topic_id, "hours_back": hours_back}, s, budget
         )
         return json.dumps(result, default=str)
 

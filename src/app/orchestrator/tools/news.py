@@ -26,18 +26,11 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
-from app.main import run_curation
+from app.curation import run_curation
+from app.orchestrator import state
 from app.orchestrator.schemas import CuratedArticle
 
 logger = logging.getLogger(__name__)
-
-# Fixed filename within the orchestrator data dir; per-run isolation is the
-# StateBackend's job once P5.1 lands. Today this is a single rolling snapshot
-# the coordinator consumes within one run before the next run overwrites it.
-# Public because sibling tools (e.g. technical_rank reads articles.json) share
-# the name — keeping it a single source of truth beats duplicating the string.
-ARTICLES_FILENAME = "articles.json"
-
 
 class FetchCuratedNewsArgs(BaseModel):
     """Tool input. `limit` caps how many articles the curation pipeline keeps
@@ -63,7 +56,7 @@ def write_articles_to_state(articles: list[CuratedArticle], data_dir: str) -> Pa
     the file on disk is, by construction, exactly what crosses the boundary."""
     root = Path(data_dir)
     root.mkdir(parents=True, exist_ok=True)
-    path = root / ARTICLES_FILENAME
+    path = state.articles_path(root)
     payload = [a.model_dump(mode="json") for a in articles]
     path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
     logger.info("Wrote %d curated articles to %s", len(articles), path)

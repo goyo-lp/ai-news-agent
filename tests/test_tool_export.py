@@ -27,13 +27,31 @@ import pytest
 
 from app.config import Settings
 from app.orchestrator.schemas import PostProposal, ResearchBrief, TopicCandidate
+from app.orchestrator.services.export_bundle import (
+    _DATE_SLUG_RE,
+    DraftIntegrity,
+    LoadedDraft,
+    RunArtifacts,
+    format_posts_md,
+    normalize_date_slug,
+)
 from app.orchestrator.tools.export import (
     ExportReportArgs,
-    _DATE_SLUG_RE,
-    _format_posts_md,
-    _normalize_date_slug,
     build_export_report_tool,
 )
+
+
+def _artifacts(*drafts: LoadedDraft, briefs: list[ResearchBrief] | None = None) -> RunArtifacts:
+    return RunArtifacts(drafts=list(drafts), briefs=briefs or [])
+
+
+def _loaded(proposal: PostProposal, gate: dict[str, Any] | None) -> LoadedDraft:
+    return LoadedDraft(
+        proposal=proposal, gate_verdict=gate, raw=proposal.model_dump(mode="json")
+    )
+
+
+_OK_MARKS = {"post-1": DraftIntegrity(provenance_ok=True, floor_ok=True)}
 
 
 def _settings(tmp_path: Path, **overrides: Any) -> Settings:
@@ -173,12 +191,12 @@ def _gate_verdict(post_id: str = "post-1", *, passed: bool = True) -> dict[str, 
 
 def test_normalize_date_slug_today_when_none() -> None:
     """date=None → today's UTC date stamp (YYYY-MM-DD shape)."""
-    slug = _normalize_date_slug(None)
+    slug = normalize_date_slug(None)
     assert _DATE_SLUG_RE.match(slug), f"today's slug must match the regex: {slug!r}"
 
 
 def test_normalize_date_slug_passes_valid_shape() -> None:
-    assert _normalize_date_slug("2026-07-21") == "2026-07-21"
+    assert normalize_date_slug("2026-07-21") == "2026-07-21"
 
 
 @pytest.mark.parametrize(
@@ -199,7 +217,7 @@ def test_normalize_date_slug_passes_valid_shape() -> None:
 )
 def test_normalize_date_slug_rejects_invalid_shape(bad: str) -> None:
     with pytest.raises(ValueError, match="YYYY-MM-DD"):
-        _normalize_date_slug(bad)
+        normalize_date_slug(bad)
 
 
 # --------------------------------------------------------------------------- #
@@ -604,7 +622,7 @@ async def test_export_partial_run_failed_gate(tmp_path: Path) -> None:
 def test_format_posts_md_empty_drafts_section() -> None:
     """Empty drafts list renders the (no drafts produced) sentinel so an
     empty bundle's posts.md isn't an empty file."""
-    md = _format_posts_md([], [], "2026-07-21", {})
+    md = format_posts_md(RunArtifacts(), "2026-07-21", {})
     assert "no drafts produced" in md
     assert "2026-07-21" in md
 
@@ -615,36 +633,35 @@ def test_format_posts_md_skips_empty_sections() -> None:
     proposal = _passing_proposal("post-1")
     proposal.hashtags = []
     proposal.citation_urls = []
-    draft_triple = (proposal, {"passed": True}, proposal.model_dump(mode="json"))
-    md = _format_posts_md(
-        [draft_triple], [], "2026-07-21", {"post-1": {"provenance_ok": True, "floor_ok": True, "floor_reason": ""}}
+
+    md = format_posts_md(
+        _artifacts(_loaded(proposal, {"passed": True})), "2026-07-21", _OK_MARKS
     )
+
     assert "**Citations:**" not in md
     assert "**Gate:** passed" in md
     assert proposal.body in md
 
 
-def test_format_posts_md_gate_footer_states() -> None:
+@pytest.mark.parametrize(
+    ("gate", "expected"),
+    [
+        ({"passed": True}, "**Gate:** passed"),
+        ({"passed": False}, "**Gate:** failed"),
+        (None, "**Gate:** absent"),
+        ({"post_id": "post-1"}, "**Gate:** absent"),  # verdict present, no `passed`
+    ],
+)
+def test_format_posts_md_gate_footer_states(
+    gate: dict[str, Any] | None, expected: str
+) -> None:
     """The Gate footer renders as `passed` / `failed` / `absent` per the
     verdict state — symmetry with the counts in run_report."""
     proposal = _passing_proposal("post-1")
-    raw = proposal.model_dump(mode="json")
-    integrity = {"post-1": {"provenance_ok": True, "floor_ok": True, "floor_reason": ""}}
-    # passed
-    assert "**Gate:** passed" in _format_posts_md(
-        [(proposal, {"passed": True}, raw)], [], "2026-07-21", integrity
-    )
-    # failed
-    assert "**Gate:** failed" in _format_posts_md(
-        [(proposal, {"passed": False}, raw)], [], "2026-07-21", integrity
-    )
-    # absent (gate_verdict None or missing the key)
-    assert "**Gate:** absent" in _format_posts_md(
-        [(proposal, None, raw)], [], "2026-07-21", integrity
-    )
-    assert "**Gate:** absent" in _format_posts_md(
-        [(proposal, {"post_id": "post-1"}, raw)], [], "2026-07-21", integrity
-    )
+
+    md = format_posts_md(_artifacts(_loaded(proposal, gate)), "2026-07-21", _OK_MARKS)
+
+    assert expected in md
 
 
 # --------------------------------------------------------------------------- #

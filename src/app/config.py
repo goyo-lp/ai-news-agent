@@ -124,20 +124,12 @@ class Settings(BaseSettings):
     # deepseek/deepseek-v4-flash.
     openrouter_stage_b_writer_model: str = "deepseek/deepseek-v4-flash"
 
-    # Coordinator (main agent) model. Landed with its consumer — the
-    # build_coordinator_agent factory (P5.2). The coordinator's job is plan +
-    # delegate, not author prose, so a cheap planner is the right default; the
-    # Decision J default is deepseek/deepseek-v4-flash. Kept as its own knob so
-    # the planner tier can be upgraded independently of Stage A ranker (P2.1)
-    # and Stage B researcher/writer (P4.*).
-    openrouter_coordinator_model: str = "deepseek/deepseek-v4-flash"
-
     # Editor relevance veto (P-spine). One batched OpenRouter call at selection
     # time that drops candidates which are not high-signal AI business/product
     # stories (e.g. pure dev-tooling release notes, OS platform tweaks) before
     # any research spend lands. The 2026-07-25 run shipped an Android-ADB story
     # and a Ruff release note from an "AI news" agent — this is the topical
-    # filter that was missing. Falls back to the coordinator model when unset;
+    # filter that was missing. Falls back to ``openrouter_model`` when unset;
     # disabled = deterministic selection only (no LLM editorial judgment).
     openrouter_editor_model: str | None = None
     editor_veto_enabled: bool = True

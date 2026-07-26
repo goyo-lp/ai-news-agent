@@ -27,46 +27,27 @@ profile seam; this tool hard-codes ``bot="linkedin"`` because the
 coordinator can't choose to route a *LinkedIn post proposal* anywhere
 else — sending it to the news chat would be a coordinated misroute.
 
-Path-traversal guard: ``post_id`` is sanitized via the inline rule
-already enforced at quality.py / verify_claim.py (no `/`, no ``..`` /
-``.`` / empty) — same parity-bound guard the state.py module (P5.1)
-centralizes. The guard is duplicated inline here for the same reason
-quality.py duplicates it: the custom tools' inline guards predate
-state.py's centralized helper, and adopting the helper per-tool is
-incremental (P5.1's docstring admits this scope-out). A future refactor
-swaps this inline guard for ``state._validate_slug(post_id, kind=
-'post_id')``; the parity test pins the agreement. A greppable
-``# TODO(swap-inline-guard-onto-state._validate_slug):`` marker stands
-next to the inline guard so the deferral is source-level greppable,
-not prose-only.
-
-Similarly, ``quality.py`` exposes a shared ``read_proposal_from_state``
-helper for the ``PostProposal.model_validate_json`` read; this tool
-reads the draft inline (same pre-helper-race shape). Adopting the helper
-is out of this PR's scope and lives with the same per-tool refactor.
+Paths, the path-traversal guard, and the brief lookup all come from
+:mod:`app.orchestrator.state`, which owns the filesystem convention.
 """
 from __future__ import annotations
 
 import html
 import json
 import logging
-from pathlib import Path
 from typing import Any
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
-from app.orchestrator.schemas import PostProposal, ResearchBrief
+from app.orchestrator import state
+from app.orchestrator.schemas import PostProposal
 from app.orchestrator.services.evidence_floor import meets_evidence_floor
 from app.orchestrator.services.provenance import verify_draft
 from app.services.telegram_client import TELEGRAM_TEXT_LIMIT, TelegramClient
 
 logger = logging.getLogger(__name__)
-
-_DRAFTS_SUBDIR = "drafts"
-_DRAFT_SUFFIX = ".json"
-_GATE_SUFFIX = ".gate.json"
 
 # The send-side cap is 4096 (Telegram's sendMessage text limit). The post
 # body is capped to 182 words by the quality gate, well under that limit;
@@ -85,19 +66,6 @@ class DeliverTelegramArgs(BaseModel):
         ...,
         description="The proposal's post_id; the draft is read from drafts/<post_id>.json.",
     )
-
-
-def _draft_path(data_dir: str, post_id: str, *, gate: bool = False) -> Path:
-    """Resolve the on-disk path for a draft or its gate verdict. Same inline
-    guard as quality.py / verify_claim.py — see module docstring for the
-    parity-bound rationale and the future swap onto state._validate_slug."""
-    # TODO(swap-inline-guard-onto-state._validate_slug): parity pinned by
-    # tests/test_state.py::test_draft_and_gate_paths_match_quality_tool_convention;
-    # swap onto state._validate_slug when adopting state helpers per-tool.
-    if "/" in post_id or post_id in {"", ".", ".."}:
-        raise ValueError(f"Invalid post_id: {post_id!r}")
-    suffix = _GATE_SUFFIX if gate else _DRAFT_SUFFIX
-    return Path(data_dir) / _DRAFTS_SUBDIR / f"{post_id}{suffix}"
 
 
 def _format_post_message(proposal: PostProposal) -> str:
@@ -174,23 +142,11 @@ def _check_evidence_floor(settings: Settings, proposal: PostProposal) -> tuple[b
     if not proposal.supporting_topic_ids:
         return False, "draft has no supporting_topic_ids; cannot check the evidence floor"
     topic_id = proposal.supporting_topic_ids[0]
-    if "/" in topic_id or topic_id in {"", ".", ".."}:
-        return False, f"invalid topic_id on draft: {topic_id!r}"
-    briefs_dir = Path(settings.orchestrator_data_dir) / "briefs"
-    for path in (
-        briefs_dir / f"{topic_id}.verified.json",
-        briefs_dir / f"{topic_id}.json",
-    ):
-        if path.exists():
-            try:
-                brief = ResearchBrief.model_validate_json(path.read_text(encoding="utf-8"))
-            except Exception as exc:
-                return False, f"brief unreadable at {path}: {exc}"
-            passes, why = meets_evidence_floor(brief, settings)
-            return passes, (
-                "" if passes else f"brief {topic_id!r} below evidence floor: {why}"
-            )
-    return False, f"no brief found for topic {topic_id!r}; cannot verify the evidence floor"
+    brief = state.read_brief(topic_id, settings.orchestrator_data_dir)
+    if brief is None:
+        return False, f"no readable brief for topic {topic_id!r}; cannot verify the evidence floor"
+    passes, why = meets_evidence_floor(brief, settings)
+    return passes, ("" if passes else f"brief {topic_id!r} below evidence floor: {why}")
 
 
 async def _deliver_one(post_id: str, settings: Settings) -> dict[str, Any]:
@@ -200,8 +156,8 @@ async def _deliver_one(post_id: str, settings: Settings) -> dict[str, Any]:
     on disk)."""
     # 1. Resolve paths + path-traversal guard.
     try:
-        draft_file = _draft_path(settings.orchestrator_data_dir, post_id)
-        gate_file = _draft_path(settings.orchestrator_data_dir, post_id, gate=True)
+        draft_file = state.draft_path(post_id, settings.orchestrator_data_dir)
+        gate_file = state.gate_path(post_id, settings.orchestrator_data_dir)
     except ValueError as exc:
         return {
             "post_id": post_id,

@@ -31,6 +31,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
+from app.orchestrator import state
 from app.orchestrator.schemas import CuratedArticle, TopicCandidate
 from app.orchestrator.services.ranking import (
     SourcePolicy,
@@ -38,11 +39,9 @@ from app.orchestrator.services.ranking import (
     rank_topics,
 )
 from app.orchestrator.services.technical_ranker import TechnicalRanker
-from app.orchestrator.tools.news import ARTICLES_FILENAME
 
 logger = logging.getLogger(__name__)
 
-_TOPICS_FILENAME = "topics.json"
 
 
 class TechnicalRankArgs(BaseModel):
@@ -66,7 +65,7 @@ def _read_articles_from_state(data_dir: str) -> list[CuratedArticle]:
     """Load the curated articles written by fetch_curated_ai_news. Raises
     FileNotFoundError (deliberately) so the coordinator surfaces a missing-news
     precondition as a real error rather than treating it as 'zero topics'."""
-    path = Path(data_dir) / ARTICLES_FILENAME
+    path = state.articles_path(data_dir)
     payload = json.loads(path.read_text(encoding="utf-8"))
     return [CuratedArticle.model_validate(item) for item in payload]
 
@@ -78,7 +77,7 @@ def write_topics_to_state(topics: list[TopicCandidate], data_dir: str) -> Path:
     on-disk contract for both tools is identical in shape."""
     root = Path(data_dir)
     root.mkdir(parents=True, exist_ok=True)
-    path = root / _TOPICS_FILENAME
+    path = state.topics_path(root)
     path.write_text(
         json.dumps([t.model_dump(mode="json") for t in topics], indent=2, default=str),
         encoding="utf-8",

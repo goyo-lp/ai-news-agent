@@ -90,7 +90,7 @@ def parse_verdicts(text: str, count: int) -> dict[int, tuple[bool, str]]:
         if not isinstance(entry, dict):
             continue
         try:
-            idx = int(entry.get("i"))
+            idx = int(entry.get("i", 0))
         except (TypeError, ValueError):
             continue
         if not 1 <= idx <= count:
@@ -118,7 +118,7 @@ async def veto_irrelevant_topics(
         return topics, []
 
     candidates = topics[:_MAX_CANDIDATES]
-    model = settings.openrouter_editor_model or settings.openrouter_coordinator_model
+    model = settings.openrouter_editor_model or settings.openrouter_model
     payload = {
         "model": model,
         "messages": [
