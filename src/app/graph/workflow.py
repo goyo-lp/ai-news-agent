@@ -66,11 +66,16 @@ def _add_core_nodes(graph: StateGraph, retry: RetryPolicy) -> None:
         timeout=timedelta(seconds=120),
         error_handler=_node_error_handler,
     )
+    # 90s, not 45s: rank now bounds its own LLM re-rank
+    # (llm_rerank_timeout_seconds) and degrades to the deterministic ranking on
+    # timeout, so this is a backstop against a genuinely hung node rather than
+    # the control on LLM latency. At 45s it *was* that control, and a slow
+    # relevance call silently zeroed out the whole digest.
     graph.add_node(
         "rank",
         rank_node,
         retry_policy=retry,
-        timeout=timedelta(seconds=45),
+        timeout=timedelta(seconds=90),
         error_handler=_node_error_handler,
     )
     graph.add_node(

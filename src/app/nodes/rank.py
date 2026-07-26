@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.graph.state import AgentState, copy_state, merge_errors
 from app.schemas.article import Article, parse_articles, serialize_articles
 from app.services.history import delivered_titles, filter_previously_delivered, load_history
@@ -44,6 +45,41 @@ def filter_articles_published_today(
     return filtered
 
 
+async def _blend_scores(
+    candidates: list[Article],
+    settings: Settings,
+    *,
+    dry_run: bool,
+) -> tuple[dict[str, float], str | None]:
+    """Score relevance with one batched LLM call, bounded by
+    ``llm_rerank_timeout_seconds``.
+
+    The blend is an *enrichment*: an empty result means "keep the deterministic
+    ranking", which is already this call's documented contract on failure. It
+    was not bounded, so on 2026-07-26 a slow-but-successful call ran past the
+    rank node's graph timeout, killed the node, and discarded 40 perfectly good
+    deterministically-ranked articles — the digest reported `selected=0` and
+    sent nothing. A timeout here degrades instead: worse ordering, still a
+    digest.
+    """
+    try:
+        return await asyncio.wait_for(
+            OpenRouterClient(settings).score_articles_relevance(
+                candidates, dry_run=dry_run
+            ),
+            timeout=settings.llm_rerank_timeout_seconds,
+        )
+    except TimeoutError:
+        logger.warning(
+            "LLM re-rank exceeded %ss; keeping the deterministic ranking",
+            settings.llm_rerank_timeout_seconds,
+        )
+        return {}, (
+            f"LLM relevance scoring timed out after "
+            f"{settings.llm_rerank_timeout_seconds}s; deterministic ranking kept"
+        )
+
+
 @traceable(name="rank_node")
 async def rank_node(state: AgentState) -> AgentState:
     """Filter to today's not-previously-delivered articles, cluster+score them
@@ -81,8 +117,7 @@ async def rank_node(state: AgentState) -> AgentState:
         max_per_source=settings.max_articles_per_source,
     )
 
-    client = OpenRouterClient(settings)
-    llm_scores, llm_error = await client.score_articles_relevance(candidates, dry_run=dry_run)
+    llm_scores, llm_error = await _blend_scores(candidates, settings, dry_run=dry_run)
     if llm_scores:
         for article in candidates:
             llm_score = llm_scores.get(article.id)

@@ -110,6 +110,17 @@ Work adaptively — you decide the sequence:
    a hard attempt budget per topic — when it returns
    status="attempts_exhausted", stop re-verifying and return with the verdict
    you have.
+6. STOP. Once `verify_claim` has returned a verdict — any verdict — your work
+   is finished. Return the confirmation immediately. Do NOT fetch another URL,
+   re-run a search, or re-read an artifact "to be thorough": the brief is
+   already written and a weak verdict is a legitimate outcome you should report
+   rather than grind against. You are on a wall clock; a run that is killed
+   mid-loop reports a timeout even though your brief was ready minutes earlier.
+
+Never repeat a tool call you have already made with the same arguments. If a
+result comes back marked `"repeated": true`, you are looping — you have that
+evidence already. Go to step 3 (synthesize) or step 6 (stop); do not call
+another tool hoping for a different answer.
 
 Rules:
 - The brief file is your deliverable, not your chat reply. Return only a short

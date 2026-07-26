@@ -140,7 +140,13 @@ class Settings(BaseSettings):
     # per-topic timeout the research.py docstring always promised but the
     # LLM-coordinator path never implemented. The 2026-07-25 trace showed one
     # research task running 261s; a hung subagent used to hang the whole run.
-    research_task_timeout_seconds: int = 420
+    #
+    # 240s, not the original 420s: in the 2026-07-26 trace two of five topics
+    # burned the full 420s. One had already written its verified brief 86s
+    # before the clock killed it and spent the remainder re-fetching URLs it
+    # had already fetched; the other produced no brief at all. A researcher
+    # that has not written a brief in four minutes is looping, not thinking.
+    research_task_timeout_seconds: int = 240
     writer_task_timeout_seconds: int = 300
 
     # Draft provenance signing key (HMAC-SHA256). The submit_draft tool signs
@@ -194,11 +200,26 @@ class Settings(BaseSettings):
     # for EU-region workspaces — an EU-issued API key is rejected (403) by
     # the US endpoint and vice versa, so this has to reach a real workspace.
     langsmith_endpoint: str | None = None
+    # Runs per ingest batch. The SDK's default of 100 produced 4-11MB compressed
+    # multipart uploads in the 2026-07-26 run, every one of which died on a
+    # socket write timeout — so the run was fully traced locally and none of it
+    # reached the workspace. Smaller batches upload rather than time out; the
+    # cost is more requests, which are cheap next to losing the trace.
+    langsmith_batch_ingest_size_limit: int = 20
 
     sources_file: str = "data/news-sources.yaml"
     history_file: str = "data/delivery-history.json"
     history_retention_days: int = 14
+    # Wall-clock bound on ONE OpenRouter attempt. This is enforced with
+    # asyncio.wait_for, not by handing the value to httpx: httpx's read timeout
+    # is per-read, and OpenRouter drip-feeds keep-alive bytes while a
+    # non-streaming completion generates, so every byte resets the clock and an
+    # httpx-only timeout never fires. See openrouter_client._request_completion.
     request_timeout_seconds: int = 20
+    # Total budget for the optional LLM re-rank in rank_node, across all
+    # attempts. Exceeding it drops the blend and keeps the deterministic
+    # ranking; it must stay well under the rank node's graph-level timeout.
+    llm_rerank_timeout_seconds: int = 25
     http_concurrency: int = 8
     max_feed_items_per_source: int = 50
     max_articles_per_run: int = 50
@@ -306,6 +327,9 @@ def configure_langsmith_env(settings: Settings) -> None:
     os.environ["LANGSMITH_TRACING"] = "true" if settings.langsmith_tracing else "false"
     if settings.langsmith_endpoint:
         os.environ["LANGSMITH_ENDPOINT"] = settings.langsmith_endpoint
+    os.environ["LANGSMITH_BATCH_INGEST_SIZE_LIMIT"] = str(
+        settings.langsmith_batch_ingest_size_limit
+    )
 
     from langsmith.utils import get_env_var, get_tracer_project
 

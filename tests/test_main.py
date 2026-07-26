@@ -9,6 +9,7 @@ import pytest
 
 from app import main
 from app.main import ProposeOptions, RunOptions
+from app.orchestrator.schemas import CuratedArticle
 
 
 @pytest.mark.parametrize(
@@ -20,11 +21,15 @@ def test_run_both_combines_exit_codes(
 ) -> None:
     calls: list[str] = []
 
-    async def fake_run_pipeline(options: RunOptions) -> int:
+    async def fake_run_pipeline(
+        options: RunOptions,
+    ) -> tuple[int, list[CuratedArticle]]:
         calls.append("run")
-        return run_exit
+        return run_exit, []
 
-    async def fake_run_propose(options: ProposeOptions) -> int:
+    async def fake_run_propose(
+        options: ProposeOptions, prefetched: list[CuratedArticle] | None = None
+    ) -> int:
         calls.append("propose")
         return propose_exit
 
@@ -35,6 +40,60 @@ def test_run_both_combines_exit_codes(
 
     assert result == expected
     assert calls == ["run", "propose"]
+
+
+def _curated(article_id: str) -> CuratedArticle:
+    return CuratedArticle(
+        id=article_id,
+        source_name="TechCrunch (AI)",
+        title=f"Title {article_id}",
+        url=f"https://example.com/{article_id}",
+    )
+
+
+@pytest.mark.parametrize(
+    ("limit", "digest_exit", "digest_articles", "expected_reuse"),
+    [
+        # The optimization: one curation feeds both lanes.
+        (None, 0, 2, True),
+        # --limit caps the digest only, so a narrowed set must not be handed on.
+        (10, 0, 2, False),
+        # A failed digest returns no articles. Handing [] on is NOT the same as
+        # handing on nothing: the spine would read it as "no news today" and
+        # stop, so one lane's failure would silently take out the other.
+        (None, 1, 0, False),
+    ],
+)
+def test_run_both_reuses_the_digest_curation_only_when_it_is_sound(
+    monkeypatch: pytest.MonkeyPatch,
+    limit: int | None,
+    digest_exit: int,
+    digest_articles: int,
+    expected_reuse: bool,
+) -> None:
+    """`both` runs one curation, not two — the second pass was ~2min of
+    duplicated feed fetching and the direct cause of the 429s. It falls back to
+    curating independently whenever reuse would mislead the proposal lane."""
+    curated = [_curated(f"a{i}") for i in range(digest_articles)]
+    handed_on: list[list[CuratedArticle] | None] = []
+
+    async def fake_run_pipeline(
+        options: RunOptions,
+    ) -> tuple[int, list[CuratedArticle]]:
+        return digest_exit, curated
+
+    async def fake_run_propose(
+        options: ProposeOptions, prefetched: list[CuratedArticle] | None = None
+    ) -> int:
+        handed_on.append(prefetched)
+        return 0
+
+    monkeypatch.setattr(main, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(main, "run_propose", fake_run_propose)
+
+    asyncio.run(main.run_both(RunOptions(limit=limit), ProposeOptions()))
+
+    assert handed_on == [curated if expected_reuse else None]
 
 
 def test_parser_maps_dry_run_to_skip_delivery_on_propose() -> None:

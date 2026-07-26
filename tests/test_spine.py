@@ -166,6 +166,33 @@ def test_spine_happy_path_produces_gated_draft(
     assert gate["passed"] is True
 
 
+def test_spine_reuses_prefetched_articles_without_curating_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`both` hands the digest lane's output straight to the spine. The
+    curation pipeline must not run a second time — that second pass cost ~2min
+    of duplicated feed fetching and caused the 429s — and the articles must
+    land on disk by the same path the fetch tool would have used, so every
+    downstream stage is unaware of the difference."""
+    settings = settings_for(tmp_path)
+
+    async def _explode(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("run_curation must not run when articles are prefetched")
+
+    from app.orchestrator.tools import news as tools_news
+
+    monkeypatch.setattr(tools_news, "run_curation", _explode)
+
+    summary, research, _writer = _run(
+        settings, monkeypatch, prefetched=[fixture_article("topic-a")]
+    )
+
+    assert summary.fetched == 1
+    assert summary.status == "ok"
+    assert json.loads((tmp_path / "articles.json").read_text())[0]["id"] == "topic-a"
+    assert len(research.calls) == 1
+
+
 def test_spine_reports_no_articles_and_stops(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

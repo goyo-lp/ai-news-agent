@@ -273,15 +273,35 @@ class OpenRouterClient:
         payload: dict[str, object],
     ) -> str:
         base_url = self.settings.openrouter_base_url
+        budget = self.settings.request_timeout_seconds
 
         async def base_call(p: dict) -> str:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers=headers,
-                json=p,
-            )
-            response.raise_for_status()
-            return str(response.json()["choices"][0]["message"]["content"])
+            # asyncio.wait_for, not httpx's timeout: httpx applies its read
+            # timeout per read operation, and OpenRouter emits keep-alive
+            # padding while a non-streaming completion generates. Each byte
+            # resets httpx's clock, so the httpx timeout on the AsyncClient
+            # never fires and one call can run unbounded — that is how a
+            # 20s-configured relevance call reached 45s and blew the rank
+            # node's graph timeout on 2026-07-26, zeroing out the digest.
+            # A middleware may retry base_call, so this bounds one attempt.
+            async def send() -> str:
+                response = await client.post(
+                    f"{base_url}/chat/completions",
+                    headers=headers,
+                    json=p,
+                )
+                response.raise_for_status()
+                return str(response.json()["choices"][0]["message"]["content"])
+
+            try:
+                return await asyncio.wait_for(send(), timeout=budget)
+            except TimeoutError as exc:
+                # asyncio.TimeoutError stringifies to "", which reaches the
+                # caller's log as "... failed: " and says nothing. Name the
+                # budget that was exceeded instead.
+                raise TimeoutError(
+                    f"OpenRouter call exceeded request_timeout_seconds={budget}"
+                ) from exc
 
         return await self._chain.execute(base_call, dict(payload))
 

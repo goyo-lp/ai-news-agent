@@ -35,7 +35,7 @@ from langsmith import traceable
 
 from app.config import Settings
 from app.orchestrator import state
-from app.orchestrator.schemas import TopicCandidate
+from app.orchestrator.schemas import CuratedArticle, TopicCandidate
 from app.orchestrator.services.drafts import DraftLoadError, load_draft
 from app.orchestrator.services.editor_veto import veto_irrelevant_topics
 from app.orchestrator.services.evidence_floor import meets_evidence_floor
@@ -49,7 +49,10 @@ from app.orchestrator.spine_result import (
 )
 from app.orchestrator.subagents.research import build_research_agent
 from app.orchestrator.subagents.writer import build_writer_agent
-from app.orchestrator.tools.news import build_fetch_curated_ai_news_tool
+from app.orchestrator.tools.news import (
+    build_fetch_curated_ai_news_tool,
+    write_articles_to_state,
+)
 from app.orchestrator.tools.technical_rank import build_technical_rank_tool
 
 logger = logging.getLogger(__name__)
@@ -251,6 +254,7 @@ async def run_propose_spine(
     *,
     run_id: str,
     limit: int | None = None,
+    prefetched: list[CuratedArticle] | None = None,
     research_agent: _AgentLike | None = None,
     writer_agent: _AgentLike | None = None,
 ) -> SpineResult:
@@ -261,6 +265,11 @@ async def run_propose_spine(
     scripted stubs implementing ``ainvoke``. Returns the run summary (also
     logged); the artifacts themselves land on disk under the orchestrator data
     dir, so export + delivery read them from there.
+
+    ``prefetched`` skips stage 1's curation run and stocks ``articles.json``
+    from an already-curated set — what ``both`` passes after the digest lane
+    produced the identical thing. It takes the same path onto disk that the
+    fetch tool uses, so every downstream stage is unaware of the difference.
     """
     # Status is set only by _stop(), at every exit including the successful
     # one — so a stage added later cannot fall through and report "ok" on a run
@@ -269,9 +278,14 @@ async def run_propose_spine(
 
     # 1. Fetch + 2. Rank — deterministic tools driven from code (no planner
     # tokens spent sequencing them).
-    fetch_tool = build_fetch_curated_ai_news_tool(settings)
-    fetch_summary = json.loads(await fetch_tool.ainvoke({"limit": limit}))
-    result.fetched = int(fetch_summary.get("count", 0))
+    if prefetched is None:
+        fetch_tool = build_fetch_curated_ai_news_tool(settings)
+        fetch_summary = json.loads(await fetch_tool.ainvoke({"limit": limit}))
+        result.fetched = int(fetch_summary.get("count", 0))
+    else:
+        write_articles_to_state(prefetched, settings.orchestrator_data_dir)
+        result.fetched = len(prefetched)
+        logger.info("spine: reusing %d already-curated articles", result.fetched)
     if result.fetched == 0:
         return _stop(result, "no_articles")
 
