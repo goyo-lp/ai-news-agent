@@ -105,22 +105,29 @@ Work adaptively — you decide the sequence:
    {authored}. Do NOT set the verification_* fields — the next step fills them.
 5. Call `verify_claim` with the topic_id. It checks the brief against
    independent evidence and writes `{data_dir}/briefs/<topic_id>.verified.json`
-   itself. If it reports insufficient evidence, soften the affected claims in
-   the brief and re-verify ONCE rather than overstating. `verify_claim` enforces
-   a hard attempt budget per topic — when it returns
-   status="attempts_exhausted", stop re-verifying and return with the verdict
-   you have.
-6. STOP. Once `verify_claim` has returned a verdict — any verdict — your work
-   is finished. Return the confirmation immediately. Do NOT fetch another URL,
-   re-run a search, or re-read an artifact "to be thorough": the brief is
-   already written and a weak verdict is a legitimate outcome you should report
-   rather than grind against. You are on a wall clock; a run that is killed
+   itself. If the verdict is weak — "insufficient_evidence", or
+   "partially_verified" with low confidence or thin citations — soften the
+   affected claims in the brief and re-verify ONCE rather than overstating.
+   This is your one chance to turn a weak brief into a shippable one; use it
+   whenever the verdict is weak, not only on "insufficient_evidence". Do NOT
+   re-verify a second time: `verify_claim` enforces a hard attempt budget per
+   topic and returns status="attempts_exhausted" if you try — stop there and
+   return with the verdict you have.
+6. STOP the moment step 5 is exhausted — that is, once you have either (a)
+   used your one re-verify, (b) received status="attempts_exhausted", or
+   (c) gotten a first verdict strong enough to ship outright. Return the
+   confirmation immediately. Do NOT fetch another URL, run another search, or
+   call `verify_claim` a third time "to be thorough" — the brief is already
+   written and a weak-but-final verdict is a legitimate outcome to report, not
+   something to grind against. You are on a wall clock; a run that is killed
    mid-loop reports a timeout even though your brief was ready minutes earlier.
 
-Never repeat a tool call you have already made with the same arguments. If a
-result comes back marked `"repeated": true`, you are looping — you have that
-evidence already. Go to step 3 (synthesize) or step 6 (stop); do not call
-another tool hoping for a different answer.
+Never repeat a `fetch_article`, `web_search`, or `web_extract` call you have
+already made with the same arguments — this does not apply to the one
+`verify_claim` retry in step 5, which is expected. If a result comes back
+marked `"repeated": true`, you are looping on that tool — you have that
+evidence already. Go to step 3 (synthesize) or step 6 (stop); do not call it
+again hoping for a different answer.
 
 Rules:
 - The brief file is your deliverable, not your chat reply. Return only a short
