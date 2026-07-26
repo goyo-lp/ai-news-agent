@@ -28,6 +28,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
+from app.orchestrator.budgets import ResultMemo
 from app.orchestrator.services.fetch_article import (
     ArticleNotHtmlError,
     BlockedArticleError,
@@ -131,12 +132,25 @@ async def _fetch_and_write(url: str, settings: Settings) -> dict[str, Any]:
 
 def build_fetch_article_tool(settings: Settings | None = None) -> StructuredTool:
     """Construct the fetch_article LangChain tool. Settings are resolved lazily
-    on first call when not supplied (mirrors the news tool)."""
+    on first call when not supplied (mirrors the news tool).
+
+    The memo is created here and closed over, so its lifetime is the lifetime of
+    this tool — one per run, shared across every topic in the research fan-out
+    (the spine builds one researcher for the whole run), nothing to reset."""
     bound_settings = settings
+    memo = ResultMemo()
 
     async def _async(url: str) -> str:
         s = bound_settings or get_settings()
+        # Key on the normalized URL so the trailing-slash and doi.org-vs-final
+        # variants the researcher tries collapse onto one entry.
+        key = normalize_url(url)
+        replayed = memo.replay(key)
+        if replayed is not None:
+            logger.info("fetch_article memo hit for %s", key)
+            return json.dumps(replayed, default=str)
         result = await _fetch_and_write(url, s)
+        memo.put(key, result)
         return json.dumps(result, default=str)
 
     return StructuredTool.from_function(

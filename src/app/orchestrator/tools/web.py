@@ -30,7 +30,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
-from app.orchestrator.budgets import SearchCircuit
+from app.orchestrator.budgets import ResultMemo, SearchCircuit
 from app.orchestrator.services.ranking import DiscoveredItem
 from app.orchestrator.services.searxng_client import (
     SearxngClient,
@@ -188,12 +188,21 @@ def build_web_search_tool(settings: Settings | None = None) -> StructuredTool:
     circuit = SearchCircuit(
         (bound_settings or get_settings()).searxng_empty_circuit_breaker
     )
+    memo = ResultMemo()
 
     async def _async(query: str, hours_back: int | None = None, max_results: int | None = None) -> str:
         s = bound_settings or get_settings()
+        # The full argument triple, not just the query: the same words with a
+        # different window are a genuinely different search.
+        key = f"{query}|{hours_back}|{max_results}"
+        replayed = memo.replay(key)
+        if replayed is not None:
+            logger.info("web_search memo hit for %r", query)
+            return json.dumps(replayed, default=str)
         result = await _run_search(
             {"query": query, "hours_back": hours_back, "max_results": max_results}, s, circuit
         )
+        memo.put(key, result)
         return json.dumps(result, default=str)
 
     return StructuredTool.from_function(
@@ -307,10 +316,19 @@ def write_extract_to_state(extracted: dict[str, str], urls: list[str], data_dir:
 def build_web_extract_tool(settings: Settings | None = None) -> StructuredTool:
     """Construct the web_extract langchain tool."""
     bound_settings = settings
+    memo = ResultMemo()
 
     async def _async(urls: list[str]) -> str:
         s = bound_settings or get_settings()
+        # Normalize + sort so the same batch requested in a different order is
+        # one entry — the batch artifact on disk is keyed the same way.
+        key = "\n".join(sorted({normalize_url(str(u or "")) for u in urls or []}))
+        replayed = memo.replay(key)
+        if replayed is not None:
+            logger.info("web_extract memo hit for %d url(s)", len(urls or []))
+            return json.dumps(replayed, default=str)
         result = await _run_extract({"urls": urls}, s)
+        memo.put(key, result)
         return json.dumps(result, default=str)
 
     return StructuredTool.from_function(

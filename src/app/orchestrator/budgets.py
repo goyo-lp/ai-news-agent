@@ -12,6 +12,8 @@ and nothing has to be reset.
 """
 from __future__ import annotations
 
+from typing import Any
+
 
 class SearchCircuit:
     """Trips after ``threshold`` consecutive empty-or-failed searches.
@@ -36,6 +38,55 @@ class SearchCircuit:
             self.consecutive_empty += 1
 
 
+class ResultMemo:
+    """Remembers one run's tool results so an identical call is answered from
+    memory instead of re-hitting the network.
+
+    From the 2026-07-26 trace: within one research fan-out the same article was
+    fetched 8 times, a second one 6 times, and whole 4-query search sets were
+    re-issued verbatim 90 seconds apart. The researcher is not learning anything
+    from the repeat — it has lost track of what it already has.
+
+    Replaying the identical summary is only half the fix, because a tool that
+    answers instantly can be re-called in a tighter loop. So a replay is marked
+    ``repeated``, which tells the model it is going in circles; the prompt turns
+    that into a stop.
+
+    Failures are remembered too, deliberately. A URL that 403s or blocks will do
+    so again, and the researcher does not back off — it retries immediately, in
+    a loop, against a wall clock. Serving the remembered failure ends that loop.
+    The cost is that a genuinely transient error is not retried within the run,
+    which is the cheaper mistake: one lost citation beats a topic that produces
+    no brief at all because it spent its budget re-asking a dead URL.
+
+    Scoped by construction: a factory creates one and closes over it, so the
+    memo's lifetime is the lifetime of the tools built for that run.
+    """
+
+    def __init__(self) -> None:
+        self._results: dict[str, dict[str, Any]] = {}
+
+    def replay(self, key: str) -> dict[str, Any] | None:
+        """The remembered summary for ``key``, flagged as a repeat, or None on
+        a first call. The flag is the whole point: the artifact is unchanged,
+        so the only new information the caller gets is that it already asked."""
+        remembered = self._results.get(key)
+        if remembered is None:
+            return None
+        return {
+            **remembered,
+            "repeated": True,
+            "note": (
+                "You already ran this exact call in this run — this is the "
+                "remembered result, not a new one. Read the artifact at `path` "
+                "and move on; repeating it again cannot produce new evidence."
+            ),
+        }
+
+    def put(self, key: str, result: dict[str, Any]) -> None:
+        self._results[key] = result
+
+
 class AttemptBudget:
     """Caps how many times one key (a topic_id) may be retried per run."""
 
@@ -50,4 +101,4 @@ class AttemptBudget:
         self._attempts[key] = self._attempts.get(key, 0) + 1
 
 
-__all__ = ["AttemptBudget", "SearchCircuit"]
+__all__ = ["AttemptBudget", "ResultMemo", "SearchCircuit"]
