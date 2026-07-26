@@ -89,13 +89,15 @@ async def test_tool_reads_articles_writes_topics_and_returns_summary(tmp_path: P
     tool = build_technical_rank_tool(settings)
     result = json.loads(await tool.ainvoke({}))
 
-    assert set(result) == {"count", "limit_used", "path"}
+    assert set(result) == {"count", "limit_used", "path", "status", "reason"}
     assert result["count"] == 2
     # No limit was requested, so the cap is however many articles were
     # available (2) — NOT settings.max_topics_per_run (5). technical_rank
     # writes every viable topic; the coordinator does the down-selection.
     assert result["limit_used"] == 2
     assert result["path"].endswith("topics.json")
+    assert result["status"] == "ok"
+    assert result["reason"] is None
     topics_path = Path(result["path"])
     assert topics_path.parent == Path(settings.orchestrator_data_dir)
 
@@ -148,15 +150,16 @@ async def test_tool_summary_omits_topic_payload(tmp_path: Path) -> None:
     assert "rationale" not in result_raw
 
 
-async def test_tool_raises_when_articles_file_missing(tmp_path: Path) -> None:
+async def test_tool_returns_error_when_articles_file_missing(tmp_path: Path) -> None:
     """Fetch_curated_ai_news must run first; a missing articles file is a real
-    precondition error, not silently-empty output."""
-    import pytest
-
+    precondition error, surfaced as a structured tool error (not a raise)."""
     settings = _settings(tmp_path)
     tool = build_technical_rank_tool(settings)
-    with pytest.raises(FileNotFoundError):
-        await tool.ainvoke({})
+    result = json.loads(await tool.ainvoke({}))
+    assert result["status"] == "error"
+    assert "articles.json not found" in result["reason"]
+    assert result["count"] == 0
+    assert result["path"] is None
 
 
 def test_default_singleton_is_a_structured_tool() -> None:

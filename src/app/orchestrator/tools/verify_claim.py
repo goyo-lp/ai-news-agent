@@ -26,6 +26,7 @@ pattern siblings as news / technical_rank / fetch_article / web.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -51,6 +52,20 @@ _VALID_STATUSES = {
     "insufficient_evidence",
     "failed",
 }
+
+# Per-topic attempt budget, process-local. The 2026-07-25 production trace
+# showed the research subagent calling verify_claim 16x across 5 topics (one
+# call 94s) in a soften-and-reverify churn loop when corroboration was thin.
+# Verification spend is now bounded in code — the prompt's "re-verify ONCE"
+# guidance is defense-in-depth, this counter is the mechanism. Keyed by
+# topic_id; one CLI run = one process, so cross-run leakage is a non-issue
+# (and tests reset explicitly).
+_ATTEMPT_COUNTERS: dict[str, int] = {}
+
+
+def _reset_attempt_counters() -> None:
+    """Test seam: clear the per-topic attempt budget between tests."""
+    _ATTEMPT_COUNTERS.clear()
 
 
 class VerifyClaimArgs(BaseModel):
@@ -174,9 +189,62 @@ async def _verify_and_write(args: dict[str, Any], settings: Settings) -> dict[st
     hours_back = int(hours_back_raw) if hours_back_raw is not None else 24
     dry_run = not (settings.openrouter_api_key or "").strip()
 
+    # Attempt budget: refuse churn before spending. Checked after the brief
+    # load so a missing brief doesn't burn an attempt.
+    max_attempts = max(1, settings.verification_max_attempts)
+    attempts = _ATTEMPT_COUNTERS.get(raw_topic, 0)
+    if attempts >= max_attempts:
+        # Surface the last known verdict so the subagent can finish honestly.
+        last_status, last_confidence = "unknown", 0.0
+        verified_path = _brief_path(
+            settings.orchestrator_data_dir, raw_topic, verified=True
+        )
+        if verified_path.exists():
+            try:
+                last = ResearchBrief.model_validate_json(
+                    verified_path.read_text(encoding="utf-8")
+                )
+                last_status = last.verification_status
+                last_confidence = last.verification_confidence
+            except Exception:
+                pass
+        return {
+            "topic_id": raw_topic,
+            "verification_status": last_status,
+            "verification_confidence": last_confidence,
+            "notes_count": 0,
+            "status": "attempts_exhausted",
+            "reason": (
+                f"verification attempt budget exhausted ({max_attempts} per "
+                "topic); stop re-verifying and report the verdict you have"
+            ),
+            "path": str(verified_path) if verified_path.exists() else None,
+        }
+    _ATTEMPT_COUNTERS[raw_topic] = attempts + 1
+
     verifier = BriefVerifier(settings)
     try:
-        verified = await verifier.verify_one(brief, hours_back=hours_back, dry_run=dry_run)
+        # Wall-clock bound: one verification call may not exceed
+        # verification_timeout_seconds (trace showed single calls at 80-94s).
+        verified = await asyncio.wait_for(
+            verifier.verify_one(brief, hours_back=hours_back, dry_run=dry_run),
+            timeout=settings.verification_timeout_seconds,
+        )
+    except TimeoutError:
+        logger.warning(
+            "verify_claim timed out for %r after %ss",
+            raw_topic,
+            settings.verification_timeout_seconds,
+        )
+        return {
+            "topic_id": raw_topic,
+            "verification_status": "failed",
+            "verification_confidence": 0.0,
+            "notes_count": 0,
+            "status": "error",
+            "reason": f"verification timed out after {settings.verification_timeout_seconds}s",
+            "path": None,
+        }
     except Exception as exc:
         # The verifier's per-brief worker already falls back inside, so a raise
         # here is catastrophic. Record it as `failed` and never propagate into
@@ -238,7 +306,10 @@ def build_verify_claim_tool(settings: Settings | None = None) -> StructuredTool:
             "verified | partially_verified | insufficient_evidence | failed. "
             "Falls back to a heuristic verdict (partially_verified) when "
             "OPENROUTER_API_KEY is unset so a subagent can exercise this "
-            "without a live model key."
+            "without a live model key. Attempts are budgeted per topic "
+            "(VERIFICATION_MAX_ATTEMPTS, default 2): once exhausted the tool "
+            "returns status=\"attempts_exhausted\" with the last verdict — "
+            "stop re-verifying at that point."
         ),
         args_schema=VerifyClaimArgs,
     )

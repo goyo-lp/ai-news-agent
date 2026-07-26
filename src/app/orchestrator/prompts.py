@@ -31,12 +31,16 @@ Why a prompt at all (and why this shape):
 
 Guardrails the prompt enforces (each is also pinned in test_e2e_dryrun):
 - ``max_topics_per_run`` cap. The model must NOT exceed it; technical_rank
-  clamps the topics file to that cap, and the prompt repeats the contract
-  so the model doesn't try to engineer around it with task() fan-out.
+  deliberately does NOT clamp the topics file (the coordinator is supposed
+  to weigh score vs source diversity), and the prompt repeats the contract
+  so the model doesn't try to engineer around it with task() fan-out. The
+  deterministic spine (the default propose path since 2026-07-26) enforces
+  the cap in code; this prompt governs the legacy path only.
 - No fabricated URLs. Every citation must trace to a brief that traced it
   to a verified source. The prompt names the consequence: a post with a
   fabricated URL is a coordinated misinformation vector and the gate
-  would catch the clauses that survive, so don't ship them upstream.
+  catches it (citation fidelity is a real gate check since 2026-07-26), so
+  don't ship them upstream.
 - One topic per task call. Bundling topics in a single task prompt lets
   the subagent blend them and writes a multi-topic brief that the
   per-topic verification path can't gate.
@@ -54,6 +58,8 @@ This module owns the prompt; build_coordinator_agent consumes it.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.config import Settings, get_settings
 
 # Stable identifier for tests and tracing. Keeps the prompt-text-heavy
@@ -69,7 +75,7 @@ COORDINATOR_PROMPT_SECTIONS = (
 )
 
 
-def _pipeline_section(max_topics_per_run: int) -> str:
+def _pipeline_section(max_topics_per_run: int, data_dir: str) -> str:
     return """## PIPELINE (run this in order)
 
 1. **Plan.** Call `write_todos` to lay out the steps below. Mark each
@@ -84,20 +90,21 @@ def _pipeline_section(max_topics_per_run: int) -> str:
    cluster, not pre-cut to `max_topics_per_run`; the tool returns a
    summary with `{count, limit_used, path}` — NOT the topic list.
 4. **Read the topics file and select.** Call
-   `read_file(file_path="topics.json")` ONCE — this is the *only time*
-   the structured payload enters your context, and it's the smallest
-   possible form (one row per topic with `topic_id`, `title`,
+   `read_file(file_path=\"""" + data_dir + """/topics.json")` ONCE — this is
+   the *only time* the structured payload enters your context, and it's the
+   smallest possible form (one row per topic with `topic_id`, `title`,
    `summary_hint`, `primary_url`, `primary_domain`, `score`,
-   `supporting_urls`). From this candidate list, select up to
-   `max_topics_per_run` topics to actually research and write. This
-   selection is yours to reason about — do not just take the top-N by
-   `score`. Weigh score against **source diversity**: look at each
-   candidate's `primary_domain` and avoid letting one domain dominate
-   the selection (e.g. three GitHub repo listings) when other
-   well-ranked topics from distinct domains are available lower in the
-   list. There is no fixed per-domain quota — use judgment on the
-   actual candidates in front of you. From here on, work topic-by-topic
-   over your selected set.
+   `supporting_urls`). The path MUST be the absolute one given here — a
+   relative `topics.json` resolves to the OS root and fails. From this
+   candidate list, select up to `max_topics_per_run` topics to actually
+   research and write. This selection is yours to reason about — do not
+   just take the top-N by `score`. Weigh score against **source
+   diversity**: look at each candidate's `primary_domain` and avoid
+   letting one domain dominate the selection (e.g. three GitHub repo
+   listings) when other well-ranked topics from distinct domains are
+   available lower in the list. There is no fixed per-domain quota — use
+   judgment on the actual candidates in front of you. From here on, work
+   topic-by-topic over your selected set.
 5. **Research, one topic at a time.** For each selected topic, call
    `task(subagent_type="research-subagent", description="...",
    prompt="<topic_id> + one-line summary + primary_url>")`. Run the N
@@ -163,23 +170,28 @@ def _guardrails_section() -> str:
     return """## GUARDRAILS (fail the run rather than violate these)
 
 - **No fabricated URLs.** Every URL a draft cites must trace to a brief
-  whose `citations` list includes that URL. The deterministic
-  `quality_gate` is the backstop, but the issue starts upstream: if the
-  research subagent reports a brief whose verification status is
-  `insufficient_evidence` or `failed`, do NOT delegate the writer for
-  that topic — skip it, note the skip in your final summary, and move
-  on. Shipping a fabricated URL is a coordinated misinformation vector
-  and the delivery layer has no fact-check of its own.
+  whose `citations` list includes that URL — the deterministic
+  `quality_gate` checks this (citation fidelity) and fails the draft. The
+  issue starts upstream: if the research subagent reports a brief whose
+  verification is `insufficient_evidence`/`failed`, or `partially_verified`
+  below the evidence floor (confidence < 0.5 or fewer than 2 citations),
+  do NOT delegate the writer for that topic — the writer's `submit_draft`
+  tool will refuse it anyway, so you would be spending a writer task for
+  nothing. Skip it, note the skip in your final summary, and move on.
+  Shipping a fabricated URL is a coordinated misinformation vector and
+  the delivery layer has no fact-check of its own.
+- **Don't author prose.** Your job is plan + delegate + surface. If you
+  catch yourself writing a LinkedIn post in your chat reply or via
+  `write_file`, stop — the writer subagent owns prose, and drafts are
+  only accepted through the writer's `submit_draft` tool: an unsigned
+  draft (anything written with `write_file`) is refused by export and
+  delivery, so self-authoring produces work that cannot ship.
 - **Cap. Never exceed `max_topics_per_run` topics across the whole run.
   The cap is the contract floor — fewer is fine if the ranker filtered
   to fewer; more is not. You enforce this cap yourself at step 4 by
   choosing which candidates to delegate — don't just take the top-N
   by score if that means shipping the same source domain three times
   over.
-- **Don't author prose.** Your job is plan + delegate + surface. If you
-  catch yourself writing a LinkedIn post in your chat reply, stop — the
-  writer subagent owns prose. You reading the draft at the end is for
-  confirmation only; you do not edit, you do not paste.
 - **Don't fabricate tool outputs.** If a tool returns `status=error` or
   `status=failed`, surface it in your summary honestly — do not invent a
   successful verdict to fill the gap. The downstream layer trusts your
@@ -244,14 +256,20 @@ def build_coordinator_system_prompt(settings: Settings | None = None) -> str:
 
     The ``max_topics_per_run`` value is interpolated into the PIPELINE
     section so the guardrail is in writing inside the contract block, not
-    just in the settings layer. Settings resolve lazily when not supplied
-    (mirrors every other factory in the orchestrator).
+    just in the settings layer. The resolved absolute data dir is
+    interpolated too — deepagents' file tools normalize relative paths to
+    the OS root under the non-virtual FilesystemBackend, so the prompt must
+    hand the model absolute paths (the failure the 2026-07-25 trace showed:
+    ``read_file("data/orchestrator/topics.json")`` -> ``/data/orchestrator/
+    topics.json`` not found, recovered via glob). Settings resolve lazily
+    when not supplied (mirrors every other factory in the orchestrator).
     """
     s = settings or get_settings()
+    data_dir = str(Path(s.orchestrator_data_dir).resolve())
     return "\n\n".join(
         [
             _role_section(),
-            _pipeline_section(s.max_topics_per_run),
+            _pipeline_section(s.max_topics_per_run, data_dir),
             _principle_3_section(),
             _delegation_section(),
             _guardrails_section(),

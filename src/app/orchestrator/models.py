@@ -50,6 +50,13 @@ def build_openrouter_chat_model(settings: Settings, *, model: str) -> ChatOpenAI
         model=model,
         api_key=SecretStr(settings.openrouter_api_key or _DRY_RUN_PLACEHOLDER_KEY),
         base_url=settings.openrouter_base_url,
+        # Ask OpenRouter to always return the usage block (incl. cost) on every
+        # agentic call. Without this the standard OpenAI-style response omits
+        # cost AND token counts for some models — the 2026-07-25 production
+        # trace showed token_usage=null on all 230 LLM runs, making spend
+        # invisible in LangSmith and in the run-usage tracker. This matches
+        # what the raw-httpx ranker/verifier already send.
+        extra_body={"usage": {"include": True}},
         # Records token usage for every call into the active run (P7.2). The
         # handler is a no-op outside a track_run_usage block, so this is inert
         # in tests and dry runs.

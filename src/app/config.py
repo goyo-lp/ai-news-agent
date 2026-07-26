@@ -71,6 +71,15 @@ class Settings(BaseSettings):
     searxng_language: str = "en"
     searxng_http_concurrency: int = 6
 
+    # web_search circuit breaker. Landed with its consumer — the web_search
+    # tool. When a *configured* SearXNG instance returns empty/failed results
+    # this many times in a row, the tool opens the circuit and tells the
+    # researcher (in the structured reason) to stop searching and pivot to
+    # web_extract on the cluster's supporting_urls. The 2026-07-25 trace
+    # showed 57 web_search calls in one run against an instance that was
+    # silently returning zero results — 11+ futile searches per topic.
+    searxng_empty_circuit_breaker: int = 3
+
     # Verifier model + bounds. Landed with their consumer — the verify_claim
     # tool (P2.4). Kept as its own knob (not a reuse of `openrouter_model`) so
     # the verifier can be pointed at a different model without disturbing the
@@ -80,6 +89,27 @@ class Settings(BaseSettings):
     openrouter_verifier_secondary_model: str | None = None
     verification_concurrency: int = 4
     verification_sources_per_topic: int = 3
+
+    # verify_claim churn guards. Landed with their consumer — the verify_claim
+    # tool. The 2026-07-25 production trace showed the research subagent
+    # re-verifying one brief up to 16x (with single calls taking 80-94s) when
+    # corroboration was thin: the tool had no attempt budget and no wall-clock
+    # bound. `verification_max_attempts` caps tool invocations per topic_id per
+    # process (the soften-and-reverify loop gets one retry); the timeout bounds
+    # one verification call.
+    verification_max_attempts: int = 2
+    verification_timeout_seconds: int = 90
+
+    # Evidence floor — the minimum verification strength a brief must reach
+    # before it may become a draft / delivery. Landed with their consumers:
+    # the submit_draft tool (write-time), deliver_telegram (send-time), the
+    # deterministic spine (delegation-time), export_report (reporting). A brief
+    # passes when it is `verified`, or `partially_verified` with confidence >=
+    # `verification_min_confidence` AND at least `verification_min_citations`
+    # citations. Anything weaker is skipped — the 2026-07-25 trace shipped
+    # single-source confidence-0.3 posts, which is exactly what this blocks.
+    verification_min_confidence: float = 0.5
+    verification_min_citations: int = 2
 
     # Stage-B research subagent model (the research subagent decides whether to
     # fetch the real article, what to verify, and what's technically new).
@@ -101,6 +131,35 @@ class Settings(BaseSettings):
     # the planner tier can be upgraded independently of Stage A ranker (P2.1)
     # and Stage B researcher/writer (P4.*).
     openrouter_coordinator_model: str = "deepseek/deepseek-v4-flash"
+
+    # Editor relevance veto (P-spine). One batched OpenRouter call at selection
+    # time that drops candidates which are not high-signal AI business/product
+    # stories (e.g. pure dev-tooling release notes, OS platform tweaks) before
+    # any research spend lands. The 2026-07-25 run shipped an Android-ADB story
+    # and a Ruff release note from an "AI news" agent — this is the topical
+    # filter that was missing. Falls back to the coordinator model when unset;
+    # disabled = deterministic selection only (no LLM editorial judgment).
+    openrouter_editor_model: str | None = None
+    editor_veto_enabled: bool = True
+
+    # Deterministic spine wall-clock bounds (the spine replaced the LLM
+    # coordinator as the default propose path). Each research/writer subagent
+    # invocation is wrapped in asyncio.wait_for with these budgets — the
+    # per-topic timeout the research.py docstring always promised but the
+    # LLM-coordinator path never implemented. The 2026-07-25 trace showed one
+    # research task running 261s; a hung subagent used to hang the whole run.
+    research_task_timeout_seconds: int = 420
+    writer_task_timeout_seconds: int = 300
+
+    # Draft provenance signing key (HMAC-SHA256). The submit_draft tool signs
+    # every draft it writes; export_report and deliver_telegram verify the
+    # signature so a draft authored outside the writer tool (e.g. an LLM
+    # coordinator writing drafts/<post_id>.json directly via write_file — the
+    # exact failure observed in the 2026-07-25 production trace) is refused.
+    # Empty derives a key from OPENROUTER_API_KEY / TELEGRAM_BOT_TOKEN so
+    # existing installs are signed without a new secret; set explicitly to
+    # rotate independently.
+    draft_signing_key: str = ""
 
     # Skills source directory (contains linkedin-voice/SKILL.md). The writer
     # subagent (P4.2) passes this to SkillsMiddleware. Landed with its consumer.
@@ -139,6 +198,10 @@ class Settings(BaseSettings):
     langsmith_api_key: str | None = None
     langsmith_project: str = "ai-news-agent"
     langsmith_tracing: bool = True
+    # Unset uses the langsmith SDK's own default (the US endpoint). Required
+    # for EU-region workspaces — an EU-issued API key is rejected (403) by
+    # the US endpoint and vice versa, so this has to reach a real workspace.
+    langsmith_endpoint: str | None = None
 
     sources_file: str = "data/news-sources.yaml"
     history_file: str = "data/delivery-history.json"
@@ -236,8 +299,23 @@ def get_settings() -> Settings:
 
 def configure_langsmith_env(settings: Settings) -> None:
     """Mirror LangSmith settings into env vars: the langsmith SDK reads its config
-    from the environment, not from values passed programmatically."""
+    from the environment, not from values passed programmatically.
+
+    ``langsmith.utils.get_env_var`` (which ``tracing_is_enabled()`` and
+    ``get_tracer_project()`` both call) is ``@lru_cache``d. By the time this
+    function runs, importing ``langgraph``/``deepagents`` earlier in the
+    process has usually already called it once — caching a "no env var set"
+    result from before these lines ran. Without clearing that cache, setting
+    the env vars here has no effect: LangSmith silently stays disabled for
+    the rest of the process even with a real API key and TRACING=true."""
     if settings.langsmith_api_key:
         os.environ["LANGSMITH_API_KEY"] = settings.langsmith_api_key
     os.environ["LANGSMITH_PROJECT"] = settings.langsmith_project
     os.environ["LANGSMITH_TRACING"] = "true" if settings.langsmith_tracing else "false"
+    if settings.langsmith_endpoint:
+        os.environ["LANGSMITH_ENDPOINT"] = settings.langsmith_endpoint
+
+    from langsmith.utils import get_env_var, get_tracer_project
+
+    get_env_var.cache_clear()  # type: ignore[attr-defined]
+    get_tracer_project.cache_clear()

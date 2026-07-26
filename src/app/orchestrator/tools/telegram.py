@@ -57,7 +57,9 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
-from app.orchestrator.schemas import PostProposal
+from app.orchestrator.schemas import PostProposal, ResearchBrief
+from app.orchestrator.services.evidence_floor import meets_evidence_floor
+from app.orchestrator.services.provenance import verify_draft
 from app.services.telegram_client import TELEGRAM_TEXT_LIMIT, TelegramClient
 
 logger = logging.getLogger(__name__)
@@ -141,15 +143,61 @@ def _format_post_message(proposal: PostProposal) -> str:
         # body as fits. Drop citations first (they're the lowest-priority
         # text), then hashtags, then body-tail. Practically never happens
         # at the gate's 182-word body cap; this is harden-against-future-
-        # gate-relaxation.
-        message = message[: _MAX_MESSAGE_LEN - 3].rstrip() + "..."
+        # gate-relaxation. The cut must not land inside an HTML tag or
+        # entity — a mid-tag slice (e.g. `<a hr`) 400s the sendMessage call.
+        message = _safe_truncate_html(message, _MAX_MESSAGE_LEN - 3).rstrip() + "..."
     return message
 
 
+def _safe_truncate_html(text: str, limit: int) -> str:
+    """Truncate to ``limit`` chars without cutting inside an HTML tag
+    (``<...>``) or entity (``&...;``). If the naive cut lands inside either,
+    back off to just before it. The message is otherwise valid HTML, so
+    truncating at a safe boundary keeps it valid."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    last_lt, last_gt = cut.rfind("<"), cut.rfind(">")
+    if last_lt > last_gt:  # cut lands inside a tag
+        cut = cut[:last_lt]
+    last_amp, last_semi = cut.rfind("&"), cut.rfind(";")
+    if last_amp > last_semi:  # cut lands inside an entity
+        cut = cut[:last_amp]
+    return cut
+
+
+def _check_evidence_floor(settings: Settings, proposal: PostProposal) -> tuple[bool, str]:
+    """Load the brief behind a draft and apply the evidence floor. The
+    verified copy wins; the pre-verification copy is the fallback (its
+    ``unverified`` status will fail the floor with an honest reason). A
+    missing/unreadable brief fails closed."""
+    if not proposal.supporting_topic_ids:
+        return False, "draft has no supporting_topic_ids; cannot check the evidence floor"
+    topic_id = proposal.supporting_topic_ids[0]
+    if "/" in topic_id or topic_id in {"", ".", ".."}:
+        return False, f"invalid topic_id on draft: {topic_id!r}"
+    briefs_dir = Path(settings.orchestrator_data_dir) / "briefs"
+    for path in (
+        briefs_dir / f"{topic_id}.verified.json",
+        briefs_dir / f"{topic_id}.json",
+    ):
+        if path.exists():
+            try:
+                brief = ResearchBrief.model_validate_json(path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                return False, f"brief unreadable at {path}: {exc}"
+            passes, why = meets_evidence_floor(brief, settings)
+            return passes, (
+                "" if passes else f"brief {topic_id!r} below evidence floor: {why}"
+            )
+    return False, f"no brief found for topic {topic_id!r}; cannot verify the evidence floor"
+
+
 async def _deliver_one(post_id: str, settings: Settings) -> dict[str, Any]:
-    """Read + gate-check + format + send one draft. Returns the compressed
-    summary that rides back to the coordinator's LLM — never the post body
-    or the gate verdict's reasons list (those live on disk)."""
+    """Read + provenance-check + gate-check + floor-check + format + send one
+    draft. Returns the compressed summary that rides back to the coordinator's
+    LLM — never the post body or the gate verdict's reasons list (those live
+    on disk)."""
     # 1. Resolve paths + path-traversal guard.
     try:
         draft_file = _draft_path(settings.orchestrator_data_dir, post_id)
@@ -172,15 +220,30 @@ async def _deliver_one(post_id: str, settings: Settings) -> dict[str, Any]:
         }
 
     try:
-        proposal = PostProposal.model_validate_json(
-            draft_file.read_text(encoding="utf-8")
-        )
+        raw_draft = json.loads(draft_file.read_text(encoding="utf-8"))
+        proposal = PostProposal.model_validate(raw_draft)
     except Exception as exc:
         return {
             "post_id": post_id,
             "status": "error",
             "reason": "draft_invalid_json",
             "error": str(exc),
+        }
+
+    # 2b. Provenance: only drafts signed by the writer's submit_draft tool may
+    # ship. An LLM (coordinator or writer) can always write_file a draft —
+    # what it cannot do is forge the HMAC key it never sees. This is the
+    # deterministic stop for the 2026-07-25 failure mode (coordinator
+    # self-authored + self-gated all five drafts).
+    if not isinstance(raw_draft, dict) or not verify_draft(raw_draft, settings):
+        return {
+            "post_id": post_id,
+            "status": "error",
+            "reason": "provenance_invalid",
+            "error": (
+                "Draft is not signed by the writer's submit_draft tool; "
+                "re-author it via the writer-subagent before delivery."
+            ),
         }
 
     # 3. Read the gate verdict and verify passed=True. Refuse to ship a
@@ -230,6 +293,18 @@ async def _deliver_one(post_id: str, settings: Settings) -> dict[str, Any]:
                 f"passed=True (got {gate_verdict.get('passed')!r}); "
                 "re-delegate the writer to fix the draft before delivery."
             ),
+        }
+
+    # 3b. Evidence floor: the brief behind the draft must still clear the
+    # floor at send time (defense-in-depth for hand-written/legacy drafts —
+    # the spine + submit_draft already enforce this upstream).
+    floor_ok, floor_reason = _check_evidence_floor(settings, proposal)
+    if not floor_ok:
+        return {
+            "post_id": post_id,
+            "status": "error",
+            "reason": "verification_floor",
+            "error": floor_reason,
         }
 
     # 4. Format the message.
@@ -284,10 +359,12 @@ def build_deliver_telegram_tool(settings: Settings | None = None) -> StructuredT
             "Returns a JSON summary with {post_id, status, bot, message_id, "
             "error} — never the post body. status='sent' on success, 'error' "
             "with a reason (invalid_post_id / draft_not_found / "
-            "draft_invalid_json / gate_verdict_missing / gate_not_passed / "
-            "send_failed) on failure. Refuses to ship a draft the gate "
-            "hasn't passed. Hard-coded bot=linkedin — a LinkedIn post "
-            "proposal can't be routed to the news chat."
+            "draft_invalid_json / provenance_invalid / verification_floor / "
+            "gate_verdict_missing / gate_not_passed / send_failed) on failure. "
+            "Refuses to ship a draft the gate hasn't passed, a draft not "
+            "signed by the writer's submit_draft tool, or a draft whose brief "
+            "is below the evidence floor. Hard-coded bot=linkedin — a "
+            "LinkedIn post proposal can't be routed to the news chat."
         ),
         args_schema=DeliverTelegramArgs,
     )

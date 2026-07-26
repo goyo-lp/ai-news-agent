@@ -27,6 +27,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from app.config import Settings
 from app.orchestrator import agent as agent_module
 from app.orchestrator.schemas import CuratedArticle
+from app.orchestrator.services.provenance import PROVENANCE_KEY, sign_draft
 
 
 def settings_for(tmp_path: Path, **overrides: Any) -> Settings:
@@ -162,21 +163,26 @@ CLEAN_GATE_BODY = (
 
 def stub_draft_json(post_id: str, topic_id: str) -> str:
     """A valid PostProposal JSON that passes the quality gate: body word count in
-    [105, 182]; exactly one supporting_topic_id; >=3 hashtags; no hype markers."""
+    [105, 182]; exactly one supporting_topic_id; >=3 hashtags; no hype markers.
+    Includes a valid ``_provenance`` block so the export + delivery integrity
+    checks pass."""
     body_words = CLEAN_GATE_BODY
     assert 105 <= len(body_words.split()) <= 182, "draft body must be in the gate's word window"
-    return json.dumps(
-        {
-            "post_id": post_id,
-            "angle": "steady improvement",
-            "headline": "Stable Diffusion 3.5's quiet attention refactor",
-            "body": body_words,
-            "hashtags": ["#stablediffusion", "#attention", "#inference"],
-            "supporting_topic_ids": [topic_id],
-            "citation_urls": [f"https://example.com/{topic_id}"],
-            "confidence": 0.8,
-        }
-    )
+    proposal_fields = {
+        "post_id": post_id,
+        "angle": "steady improvement",
+        "headline": "Stable Diffusion 3.5's quiet attention refactor",
+        "body": body_words,
+        "hashtags": ["#stablediffusion", "#attention", "#inference"],
+        "supporting_topic_ids": [topic_id],
+        "citation_urls": [f"https://example.com/{topic_id}"],
+        "confidence": 0.8,
+    }
+    # Sign with defaults (dev fallback key) so provenance verification passes.
+    settings = Settings(_env_file=None)
+    provenance = sign_draft(proposal_fields, settings)
+    proposal_fields[PROVENANCE_KEY] = provenance
+    return json.dumps(proposal_fields)
 
 
 def mock_run_curation_one_article(

@@ -46,6 +46,21 @@ _WEB_SUBDIR = "web"
 _SEARCH_SUBDIR = "search"
 _EXTRACT_SUBDIR = "extracted"
 
+# Circuit breaker for a silently-dead SearXNG instance (2026-07-25 trace:
+# 57 web_search calls in one run, every one returning zero results — the
+# researcher kept retrying 11+ times per topic because nothing told it to
+# stop). Counts CONSECUTIVE empty/failed searches against a *configured*
+# instance; when the count reaches settings.searxng_empty_circuit_breaker the
+# tool returns status="circuit_open" with an explicit pivot instruction
+# instead of burning another request. A search that returns results resets
+# the count. Process-local; one CLI run = one process.
+_CONSECUTIVE_EMPTY_SEARCHES: list[int] = [0]
+
+
+def _reset_search_circuit() -> None:
+    """Test seam: reset the circuit breaker between tests."""
+    _CONSECUTIVE_EMPTY_SEARCHES[0] = 0
+
 
 def _slug(value: str, length: int = 12) -> str:
     """Stable filesystem slug for a research artifact (query or batch key).
@@ -91,6 +106,24 @@ async def _run_search(args: dict[str, Any], settings: Settings) -> dict[str, Any
     # behavior), so the tool works before an instance is stood up.
     dry_run = not (settings.searxng_base_url or "").strip()
 
+    # Circuit breaker: only meaningful against a real instance (the dry-run
+    # mock always returns results, so it can never trip this).
+    threshold = max(1, settings.searxng_empty_circuit_breaker)
+    if not dry_run and _CONSECUTIVE_EMPTY_SEARCHES[0] >= threshold:
+        return {
+            "query": query,
+            "result_count": 0,
+            "status": "circuit_open",
+            "reason": (
+                f"SearXNG returned empty/failed results "
+                f"{_CONSECUTIVE_EMPTY_SEARCHES[0]} times in a row — the search "
+                "backend is not producing evidence this run. STOP searching; "
+                "corroborate via fetch_article on the primary_url and "
+                "web_extract on the topic's supporting_urls instead."
+            ),
+            "path": None,
+        }
+
     client = SearxngClient(settings)
     timeout = httpx.Timeout(settings.request_timeout_seconds)
     empty_summary = {
@@ -112,22 +145,38 @@ async def _run_search(args: dict[str, Any], settings: Settings) -> dict[str, Any
                 )
             except SearxngSearchError as exc:
                 logger.warning("web_search failed for %r: %s", query, exc)
+                _CONSECUTIVE_EMPTY_SEARCHES[0] += 1
                 return {**empty_summary, "status": "error", "reason": str(exc)}
             except Exception as exc:
                 logger.warning("web_search unexpected for %r: %s", query, exc)
+                _CONSECUTIVE_EMPTY_SEARCHES[0] += 1
                 return {**empty_summary, "status": "error", "reason": f"{type(exc).__name__}: {exc}"}
     except Exception as exc:  # httpx.AsyncClient construction failure
         logger.warning("web_search http client failed: %s", exc)
+        _CONSECUTIVE_EMPTY_SEARCHES[0] += 1
         return {**empty_summary, "status": "error", "reason": f"{type(exc).__name__}: {exc}"}
 
+    if items:
+        _CONSECUTIVE_EMPTY_SEARCHES[0] = 0
+    else:
+        _CONSECUTIVE_EMPTY_SEARCHES[0] += 1
+
     path = write_search_to_state(items, query, settings.orchestrator_data_dir)
-    return {
+    result = {
         "query": query,
         "result_count": len(items),
         "status": "ok",
         "reason": None,
         "path": str(path),
     }
+    if not items and not dry_run:
+        # Tell the researcher how close the circuit is to opening so it can
+        # budget its own pivot instead of discovering it the hard way.
+        result["reason"] = (
+            f"0 results ({_CONSECUTIVE_EMPTY_SEARCHES[0]}/{threshold} before "
+            "search circuit opens); prefer web_extract on supporting_urls"
+        )
+    return result
 
 
 def write_search_to_state(items: list[DiscoveredItem], query: str, data_dir: str) -> Path:
@@ -168,7 +217,10 @@ def build_web_search_tool(settings: Settings | None = None) -> StructuredTool:
             "summary with {query, result_count, status, reason, path} — never "
             "the results themselves. Read them from `path` when `status == "
             "\"ok\"`. Returns a mocked result set when SEARXNG_BASE_URL is unset "
-            "so a subagent can exercise this with no instance running."
+            "so a subagent can exercise this with no instance running. When "
+            "the configured instance returns empty results repeatedly the tool "
+            "returns status=\"circuit_open\": STOP searching and corroborate "
+            "via fetch_article + web_extract on supporting_urls instead."
         ),
         args_schema=WebSearchArgs,
     )

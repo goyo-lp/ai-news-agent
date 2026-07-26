@@ -604,7 +604,7 @@ async def test_export_partial_run_failed_gate(tmp_path: Path) -> None:
 def test_format_posts_md_empty_drafts_section() -> None:
     """Empty drafts list renders the (no drafts produced) sentinel so an
     empty bundle's posts.md isn't an empty file."""
-    md = _format_posts_md([], [], "2026-07-21")
+    md = _format_posts_md([], [], "2026-07-21", {})
     assert "no drafts produced" in md
     assert "2026-07-21" in md
 
@@ -615,8 +615,9 @@ def test_format_posts_md_skips_empty_sections() -> None:
     proposal = _passing_proposal("post-1")
     proposal.hashtags = []
     proposal.citation_urls = []
+    draft_triple = (proposal, {"passed": True}, proposal.model_dump(mode="json"))
     md = _format_posts_md(
-        [(proposal, {"passed": True})], [], "2026-07-21"
+        [draft_triple], [], "2026-07-21", {"post-1": {"provenance_ok": True, "floor_ok": True, "floor_reason": ""}}
     )
     assert "**Citations:**" not in md
     assert "**Gate:** passed" in md
@@ -627,20 +628,22 @@ def test_format_posts_md_gate_footer_states() -> None:
     """The Gate footer renders as `passed` / `failed` / `absent` per the
     verdict state — symmetry with the counts in run_report."""
     proposal = _passing_proposal("post-1")
+    raw = proposal.model_dump(mode="json")
+    integrity = {"post-1": {"provenance_ok": True, "floor_ok": True, "floor_reason": ""}}
     # passed
     assert "**Gate:** passed" in _format_posts_md(
-        [(proposal, {"passed": True})], [], "2026-07-21"
+        [(proposal, {"passed": True}, raw)], [], "2026-07-21", integrity
     )
     # failed
     assert "**Gate:** failed" in _format_posts_md(
-        [(proposal, {"passed": False})], [], "2026-07-21"
+        [(proposal, {"passed": False}, raw)], [], "2026-07-21", integrity
     )
     # absent (gate_verdict None or missing the key)
     assert "**Gate:** absent" in _format_posts_md(
-        [(proposal, None)], [], "2026-07-21"
+        [(proposal, None, raw)], [], "2026-07-21", integrity
     )
     assert "**Gate:** absent" in _format_posts_md(
-        [(proposal, {"post_id": "post-1"})], [], "2026-07-21"
+        [(proposal, {"post_id": "post-1"}, raw)], [], "2026-07-21", integrity
     )
 
 

@@ -24,6 +24,11 @@ Checks (each returns its own reason-on-fail note, merged into the result's
      ``revolutionary``, ``must-have``, ``10x``, ``act now``, ``can't miss``,
      ``unlock``). Hype markers fail the gate rather than silently rewrite — the
      writer is supposed to avoid them; a fail-with-reason is the retry signal.
+  4. **citation fidelity** (:func:`citation_fidelity_reasons`, merged by the
+     tool layer): every ``citation_urls`` entry must trace to the brief's
+     ``citations``. The coordinator guardrail always *claimed* this check as
+     the no-fabricated-URLs backstop; before 2026-07-26 the gate had no such
+     check and URL fidelity rested entirely on LLM honesty.
 
 Helpers ported verbatim from the reference where their behavior is documented:
 
@@ -57,7 +62,8 @@ import logging
 import re
 from dataclasses import dataclass, field
 
-from app.orchestrator.schemas import PostProposal
+from app.orchestrator.schemas import PostProposal, ResearchBrief
+from app.services.rss_client import normalize_url
 
 logger = logging.getLogger(__name__)
 
@@ -271,6 +277,40 @@ def check_proposal(proposal: PostProposal) -> QualityResult:
     )
 
 
+def citation_fidelity_reasons(
+    proposal: PostProposal, brief: ResearchBrief | None
+) -> list[str]:
+    """Check every draft citation traces to the brief's own citations.
+
+    This is the deterministic backstop for the coordinator's "no fabricated
+    URLs" guardrail — the check the guardrail always claimed the gate ran.
+    URLs are compared after ``normalize_url`` (tracking params stripped,
+    scheme/host normalized) so a citation that differs only by UTM noise
+    still matches. A missing brief fails: an untraceable citation set is
+    exactly what this check exists to catch.
+
+    Kept separate from :func:`check_proposal` (which stays pure over the
+    proposal alone) and merged by the tool layer, which owns brief loading.
+    """
+    if brief is None:
+        topic = proposal.supporting_topic_ids[0] if proposal.supporting_topic_ids else "<none>"
+        return [
+            f"citation fidelity unverifiable: no brief found for topic {topic!r} "
+            "— citations cannot be traced"
+        ]
+    allowed = {normalize_url(c.url) for c in brief.citations if c.url.strip()}
+    reasons: list[str] = []
+    for url in proposal.citation_urls:
+        if not url.strip():
+            continue
+        if normalize_url(url) not in allowed:
+            reasons.append(
+                f"citation not in brief: {url!r} is not among the brief's "
+                f"{len(allowed)} citation(s) — remove it or cite a sourced URL"
+            )
+    return reasons
+
+
 # NOTE: reserved for future use. The current tool layer catches all
 # load/parse exceptions inline and surfaces them as `status=error` summaries
 # rather than raising a typed exception into the agent loop; a future refactor
@@ -284,6 +324,7 @@ class QualityGateError(Exception):
 __all__ = [
     "QualityResult",
     "check_proposal",
+    "citation_fidelity_reasons",
     "count_words",
     "has_hype",
     "normalize_hashtags",

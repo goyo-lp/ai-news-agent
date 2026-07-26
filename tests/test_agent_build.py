@@ -195,8 +195,15 @@ def test_coordinator_subagent_tool_overlap_is_intentional(
     assert "technical_rank" in coord_tool_names
     assert {"fetch_curated_ai_news", "technical_rank"}.isdisjoint(research_tools)
     assert {"fetch_curated_ai_news", "technical_rank"}.isdisjoint(writer_tools)
-    # The writer carries only quality_gate (its single closed-loop gate tool).
-    assert writer_tools == {"quality_gate"}
+    # The writer carries submit_draft (the ONLY sanctioned draft-creation
+    # path — provenance-signed, evidence-floored) + quality_gate (its
+    # closed-loop gate tool). submit_draft is deliberately NOT promoted to
+    # the coordinator: draft creation is a writer-owned choke point (the
+    # 2026-07-25 trace showed the coordinator self-authoring drafts when it
+    # had write access).
+    assert writer_tools == {"quality_gate", "submit_draft"}
+    assert "submit_draft" not in coord_tool_names
+    assert "submit_draft" not in research_tools
 
 
 def test_build_returns_compiled_state_graph_real_path(tmp_path: Path) -> None:

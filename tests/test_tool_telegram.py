@@ -83,12 +83,55 @@ def _passing_proposal(post_id: str = "post-1", topic_id: str = "topic-a") -> Pos
 
 
 def _draft(tmp_path: Path, post_id: str = "post-1", *, proposal: PostProposal | None = None) -> Path:
-    """Stage a draft at drafts/<post_id>.json. Returns the written path."""
+    """Stage a SIGNED draft at drafts/<post_id>.json — the shape the writer's
+    submit_draft tool produces (provenance block included). Delivery refuses
+    unsigned drafts, so the fixture must sign like production does. Returns
+    the written path."""
+    from app.orchestrator.tools.draft import write_signed_draft
+
     p = proposal or _passing_proposal(post_id)
+    return write_signed_draft(p, _settings(tmp_path))
+
+
+def _unsigned_draft(tmp_path: Path, post_id: str = "post-1") -> Path:
+    """Stage a draft the way an LLM would via write_file — valid PostProposal
+    JSON, NO provenance block. Used to pin the provenance refusal."""
+    p = _passing_proposal(post_id)
     draft_dir = tmp_path / "drafts"
     draft_dir.mkdir(parents=True, exist_ok=True)
     path = draft_dir / f"{post_id}.json"
     path.write_text(p.model_dump_json(indent=2), encoding="utf-8")
+    return path
+
+
+def _brief(tmp_path: Path, topic_id: str = "topic-a", *, status: str = "verified") -> Path:
+    """Stage a verified brief whose citations cover the passing proposal's
+    citation_urls, so the evidence floor + citation tracing pass. Returns
+    the written path."""
+    brief_dir = tmp_path / "briefs"
+    brief_dir.mkdir(parents=True, exist_ok=True)
+    path = brief_dir / f"{topic_id}.verified.json"
+    payload = {
+        "topic_id": topic_id,
+        "headline": "Stable Diffusion 3.5 attention refactor",
+        "summary": "A new attention mechanism lowers serving cost.",
+        "technical_significance": "Throughput improvement at parity quality.",
+        "business_impact": "Lower per-image cost for production serving.",
+        "why_now": "Released this week.",
+        "key_points": ["new attention path", "throughput up"],
+        "risks": [],
+        "citations": [
+            {
+                "title": "SD3.5 release notes",
+                "url": f"https://example.com/{topic_id}",
+                "domain": "example.com",
+            }
+        ],
+        "verification_status": status,
+        "verification_confidence": 0.9,
+        "verification_notes": [],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
 
@@ -232,6 +275,58 @@ async def test_gate_verdict_missing(tmp_path: Path) -> None:
     assert result["reason"] == "gate_verdict_missing"
 
 
+async def test_unsigned_draft_refuses_delivery(tmp_path: Path) -> None:
+    """A draft written outside the writer's submit_draft tool (valid
+    PostProposal JSON, no provenance signature — exactly what an LLM's
+    write_file produces) is refused BEFORE the gate is even consulted. This
+    is the deterministic stop for the 2026-07-25 failure mode (coordinator
+    self-authored + self-gated all five drafts)."""
+    tool = build_deliver_telegram_tool(_settings(tmp_path))
+    _unsigned_draft(tmp_path, "post-1")
+    _gate(tmp_path, "post-1")
+    _brief(tmp_path)
+    result_raw = await tool.ainvoke({"post_id": "post-1"})
+    result = json.loads(result_raw)
+    assert result["status"] == "error"
+    assert result["reason"] == "provenance_invalid"
+
+
+async def test_tampered_draft_refuses_delivery(tmp_path: Path) -> None:
+    """A signed draft whose body was edited after signing (signature no
+    longer matches the payload) is refused — provenance covers content,
+    not just origin."""
+    tool = build_deliver_telegram_tool(_settings(tmp_path))
+    draft_path = _draft(tmp_path, "post-1")
+    payload = json.loads(draft_path.read_text(encoding="utf-8"))
+    payload["body"] = payload["body"] + " Tampered sentence."
+    draft_path.write_text(json.dumps(payload), encoding="utf-8")
+    _gate(tmp_path, "post-1")
+    _brief(tmp_path)
+    result_raw = await tool.ainvoke({"post_id": "post-1"})
+    result = json.loads(result_raw)
+    assert result["status"] == "error"
+    assert result["reason"] == "provenance_invalid"
+
+
+async def test_below_floor_brief_refuses_delivery(tmp_path: Path) -> None:
+    """A signed, gate-passed draft whose brief is below the evidence floor
+    (single citation, low confidence) is refused at send time — the floor
+    is enforced at every choke point, not just upstream."""
+    tool = build_deliver_telegram_tool(_settings(tmp_path))
+    _draft(tmp_path, "post-1")
+    _gate(tmp_path, "post-1")
+    _brief(tmp_path, status="partially_verified")
+    # The fixture brief has 1 citation + we need low confidence: rewrite it.
+    brief_path = tmp_path / "briefs" / "topic-a.verified.json"
+    payload = json.loads(brief_path.read_text(encoding="utf-8"))
+    payload["verification_confidence"] = 0.3
+    brief_path.write_text(json.dumps(payload), encoding="utf-8")
+    result_raw = await tool.ainvoke({"post_id": "post-1"})
+    result = json.loads(result_raw)
+    assert result["status"] == "error"
+    assert result["reason"] == "verification_floor"
+
+
 async def test_gate_verdict_not_passed_refuses_delivery(tmp_path: Path) -> None:
     """A draft whose gate verdict reports passed=False is refused — surfaces
     status=error reason=gate_not_passed with gate_passed=False. Catches the
@@ -280,6 +375,7 @@ async def test_delivery_dry_run_when_linkedin_profile_unconfigured(tmp_path: Pat
     tool = build_deliver_telegram_tool(s)
     _draft(tmp_path, "post-1")
     _gate(tmp_path, "post-1")
+    _brief(tmp_path)
     result_raw = await tool.ainvoke({"post_id": "post-1"})
     result = json.loads(result_raw)
     assert result["status"] == "dry_run"
@@ -311,6 +407,7 @@ async def test_delivery_send_success(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     tool = build_deliver_telegram_tool(_settings(tmp_path))
     _draft(tmp_path, "post-1")
     _gate(tmp_path, "post-1")
+    _brief(tmp_path)
     result_raw = await tool.ainvoke({"post_id": "post-1"})
     result = json.loads(result_raw)
 
@@ -348,6 +445,7 @@ async def test_delivery_routes_only_to_linkedin_never_news(
     tool = build_deliver_telegram_tool(_settings(tmp_path))
     _draft(tmp_path, "post-1")
     _gate(tmp_path, "post-1")
+    _brief(tmp_path)
     await tool.ainvoke({"post_id": "post-1"})
 
     assert sent_bots == ["linkedin"]
@@ -368,6 +466,7 @@ async def test_summary_never_contains_post_body(
     tool = build_deliver_telegram_tool(_settings(tmp_path))
     _draft(tmp_path, "post-1")
     _gate(tmp_path, "post-1")
+    _brief(tmp_path)
     result_raw = await tool.ainvoke({"post_id": "post-1"})
     body = _passing_proposal().body
     assert body[:40] not in result_raw

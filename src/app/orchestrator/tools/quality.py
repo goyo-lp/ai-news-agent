@@ -28,10 +28,11 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
-from app.orchestrator.schemas import PostProposal
+from app.orchestrator.schemas import PostProposal, ResearchBrief
 from app.orchestrator.services.quality_gate import (
     QualityResult,
     check_proposal,
+    citation_fidelity_reasons,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,31 @@ def read_proposal_from_state(data_dir: str, post_id: str) -> PostProposal:
     path = _draft_path(data_dir, post_id)
     payload = json.loads(path.read_text(encoding="utf-8"))
     return PostProposal.model_validate(payload)
+
+
+def _load_brief_for_fidelity(data_dir: str, proposal: PostProposal) -> ResearchBrief | None:
+    """Load the brief behind a draft for the citation-fidelity check. The
+    verified copy wins (it's the post-verification state the writer cited
+    from); the pre-verification copy is the fallback. Returns None when no
+    readable brief exists — the fidelity check turns that into a failure
+    reason, not a silent pass."""
+    if not proposal.supporting_topic_ids:
+        return None
+    topic_id = proposal.supporting_topic_ids[0]
+    if "/" in topic_id or topic_id in {"", ".", ".."}:
+        return None
+    briefs_dir = Path(data_dir) / "briefs"
+    for path in (
+        briefs_dir / f"{topic_id}.verified.json",
+        briefs_dir / f"{topic_id}.json",
+    ):
+        if path.exists():
+            try:
+                return ResearchBrief.model_validate_json(path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                logger.warning("quality_gate brief load failed at %s: %s", path, exc)
+                return None
+    return None
 
 
 def write_gate_to_state(result: QualityResult, post_id: str, data_dir: str) -> Path:
@@ -158,6 +184,15 @@ async def _gate_and_write(args: dict[str, Any], settings: Settings) -> dict[str,
         failure_summary["reason"] = f"{type(exc).__name__}: {exc}"
         return failure_summary
 
+    # Citation fidelity: every draft citation must trace to the brief's own
+    # citations — the deterministic backstop for the "no fabricated URLs"
+    # guardrail. Merged into the verdict so the writer sees one reasons list.
+    brief = _load_brief_for_fidelity(settings.orchestrator_data_dir, proposal)
+    fidelity_reasons = citation_fidelity_reasons(proposal, brief)
+    if fidelity_reasons:
+        result.reasons.extend(fidelity_reasons)
+        result.passed = not result.reasons
+
     try:
         path = write_gate_to_state(result, raw_post, settings.orchestrator_data_dir)
     except ValueError as exc:
@@ -196,7 +231,9 @@ def build_quality_gate_tool(settings: Settings | None = None) -> StructuredTool:
             "Run the deterministic post-proposal quality gate against the draft "
             "at drafts/<post_id>.json: word count 105–182 (after cleaning), "
             "exactly one supporting_topic_id, no hype markers, at least 3 "
-            "usable hashtags. Writes the verdict to drafts/<post_id>.gate.json. "
+            "usable hashtags, and citation fidelity (every citation_url must "
+            "trace to the brief's citations). Writes the verdict to "
+            "drafts/<post_id>.gate.json. "
             "Returns a JSON summary with {post_id, passed, word_count, "
             "hashtags_count, single_topic, has_hype, reasons_count, status, "
             "reason, path} — never the draft body or the full reasons list. "

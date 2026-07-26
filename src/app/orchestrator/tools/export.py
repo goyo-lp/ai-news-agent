@@ -55,6 +55,8 @@ from pydantic import BaseModel, Field
 from app.config import Settings, get_settings
 from app.orchestrator import state
 from app.orchestrator.schemas import PostProposal, ResearchBrief, TopicCandidate
+from app.orchestrator.services.evidence_floor import meets_evidence_floor
+from app.orchestrator.services.provenance import verify_draft
 
 logger = logging.getLogger(__name__)
 
@@ -147,10 +149,12 @@ def _load_topics(data_dir: Path) -> list[TopicCandidate]:
         return []
 
 
-def _load_drafts(data_dir: Path) -> list[tuple[PostProposal, dict[str, Any] | None]]:
+def _load_drafts(data_dir: Path) -> list[tuple[PostProposal, dict[str, Any] | None, dict[str, Any]]]:
     """Load every draft under ``drafts/<post_id>.json`` paired with its
-    gate verdict (``drafts/<post_id>.gate.json`` if present, else None).
-    Returns a list of ``(proposal, gate_verdict_or_None)`` tuples.
+    gate verdict (``drafts/<post_id>.gate.json`` if present, else None) and
+    the raw draft dict (for provenance verification — the pydantic model
+    drops the ``_provenance`` block on validate). Returns a list of
+    ``(proposal, gate_verdict_or_None, raw_draft)`` tuples.
 
     Walks the drafts subdir rather than reading from a topics file — a
     draft may exist without a topic entry (e.g. a manual backfill), and a
@@ -161,24 +165,26 @@ def _load_drafts(data_dir: Path) -> list[tuple[PostProposal, dict[str, Any] | No
     if not drafts_dir.exists():
         return []
 
-    pairs: list[tuple[PostProposal, dict[str, Any] | None]] = []
+    pairs: list[tuple[PostProposal, dict[str, Any] | None, dict[str, Any]]] = []
     for draft_file in sorted(drafts_dir.glob("*.json")):
         # Skip gate verdict files — they're loaded alongside their draft.
         if draft_file.name.endswith(".gate.json"):
             continue
         try:
-            proposal = PostProposal.model_validate_json(
-                draft_file.read_text(encoding="utf-8")
-            )
+            raw_draft = json.loads(draft_file.read_text(encoding="utf-8"))
+            proposal = PostProposal.model_validate(raw_draft)
         except Exception as exc:
             logger.warning("Malformed draft at %s: %s", draft_file, exc)
+            continue
+        if not isinstance(raw_draft, dict):
+            logger.warning("Non-object draft at %s", draft_file)
             continue
         gate_path = drafts_dir / f"{proposal.post_id}.gate.json"
         gate_verdict: dict[str, Any] | None = None
         if gate_path.exists():
             raw_gate = _read_json_or_none(gate_path)
             gate_verdict = raw_gate if isinstance(raw_gate, dict) else None
-        pairs.append((proposal, gate_verdict))
+        pairs.append((proposal, gate_verdict, raw_draft))
     return pairs
 
 
@@ -214,10 +220,40 @@ def _load_briefs(data_dir: Path, topics: list[TopicCandidate]) -> list[ResearchB
     return briefs
 
 
+def _draft_integrity(
+    drafts: list[tuple[PostProposal, dict[str, Any] | None, dict[str, Any]]],
+    briefs: list[ResearchBrief],
+    settings: Settings,
+) -> dict[str, dict[str, Any]]:
+    """Compute per-draft integrity state for the report: provenance (signed
+    by the writer's submit_draft tool?) and evidence floor (does the brief
+    behind it still pass?). Keyed by post_id. This is REPORTING only — the
+    spine / submit_draft / deliver_telegram enforce these upstream; the
+    report surfaces the skip rate as a first-class metric."""
+    briefs_by_topic = {b.topic_id: b for b in briefs}
+    integrity: dict[str, dict[str, Any]] = {}
+    for proposal, _gate, raw in drafts:
+        provenance_ok = verify_draft(raw, settings)
+        floor_ok, floor_reason = False, "no supporting topic"
+        if proposal.supporting_topic_ids:
+            brief = briefs_by_topic.get(proposal.supporting_topic_ids[0])
+            if brief is None:
+                floor_ok, floor_reason = False, "brief missing"
+            else:
+                floor_ok, floor_reason = meets_evidence_floor(brief, settings)
+        integrity[proposal.post_id] = {
+            "provenance_ok": provenance_ok,
+            "floor_ok": floor_ok,
+            "floor_reason": "" if floor_ok else floor_reason,
+        }
+    return integrity
+
+
 def _format_posts_md(
-    drafts: list[tuple[PostProposal, dict[str, Any] | None]],
+    drafts: list[tuple[PostProposal, dict[str, Any] | None, dict[str, Any]]],
     briefs: list[ResearchBrief],
     date_slug: str,
+    integrity: dict[str, dict[str, Any]],
 ) -> str:
     """Render the day's posts as Markdown: one section per draft, header
     is the post_id + headline, body is the post body (verbatim), followed
@@ -229,7 +265,7 @@ def _format_posts_md(
         return f"# AI News Agent posts for {date_slug}\n\n(no drafts produced)\n"
 
     lines: list[str] = [f"# AI News Agent posts for {date_slug}", ""]
-    for proposal, gate_verdict in drafts:
+    for proposal, gate_verdict, _raw in drafts:
         lines.append(f"## {proposal.post_id} — {proposal.headline}")
         lines.append("")
         lines.append(proposal.body)
@@ -254,7 +290,10 @@ def _format_posts_md(
             if gate_verdict and gate_verdict.get("passed") is False
             else "absent"
         )
-        lines.append(f"**Gate:** {gate_state}")
+        state = integrity.get(proposal.post_id, {})
+        provenance = "signed" if state.get("provenance_ok") else "UNSIGNED"
+        floor = "floor-ok" if state.get("floor_ok") else f"below-floor ({state.get('floor_reason', '')})"
+        lines.append(f"**Gate:** {gate_state} | **Provenance:** {provenance} | **Evidence:** {floor}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
@@ -264,8 +303,9 @@ def _build_run_report(
     outputs_bundle: Path,
     date_slug: str,
     topics: list[TopicCandidate],
-    drafts: list[tuple[PostProposal, dict[str, Any] | None]],
+    drafts: list[tuple[PostProposal, dict[str, Any] | None, dict[str, Any]]],
     briefs: list[ResearchBrief],
+    integrity: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     """Assemble the structured run report dict. Captures counts + paths
     only — never copies of the artifacts themselves (principle #3)."""
@@ -282,13 +322,22 @@ def _build_run_report(
             "briefs": len(briefs),
             "drafts": len(drafts),
             "drafts_passed": sum(
-                1 for _p, g in drafts if g and g.get("passed") is True
+                1 for _p, g, _r in drafts if g and g.get("passed") is True
             ),
             "drafts_failed": sum(
-                1 for _p, g in drafts if g and g.get("passed") is False
+                1 for _p, g, _r in drafts if g and g.get("passed") is False
             ),
             "drafts_gate_absent": sum(
-                1 for _p, g in drafts if g is None
+                1 for _p, g, _r in drafts if g is None
+            ),
+            # Integrity metrics (P-trace fixes): unsigned drafts = authored
+            # outside the writer's submit_draft tool; below-floor = brief too
+            # weak to ship. Both must trend to zero.
+            "drafts_provenance_invalid": sum(
+                1 for state in integrity.values() if not state["provenance_ok"]
+            ),
+            "drafts_below_floor": sum(
+                1 for state in integrity.values() if not state["floor_ok"]
             ),
         },
         "topics": [
@@ -318,8 +367,11 @@ def _build_run_report(
                     if g is not None and g.get("passed") is False
                     else None
                 ),
+                "provenance_ok": integrity.get(p.post_id, {}).get("provenance_ok", False),
+                "floor_ok": integrity.get(p.post_id, {}).get("floor_ok", False),
+                "floor_reason": integrity.get(p.post_id, {}).get("floor_reason", ""),
             }
-            for p, g in drafts
+            for p, g, _r in drafts
         ],
     }
 
@@ -362,9 +414,10 @@ async def _export_one(
     topics = _load_topics(data_dir)
     drafts = _load_drafts(data_dir)
     briefs = _load_briefs(data_dir, topics)
+    integrity = _draft_integrity(drafts, briefs, settings)
 
-    posts_md = _format_posts_md(drafts, briefs, date_slug)
-    run_report = _build_run_report(data_dir, bundle_dir, date_slug, topics, drafts, briefs)
+    posts_md = _format_posts_md(drafts, briefs, date_slug, integrity)
+    run_report = _build_run_report(data_dir, bundle_dir, date_slug, topics, drafts, briefs, integrity)
     briefs_payload = [b.model_dump(mode="json") for b in briefs]
 
     posts_path = bundle_dir / _POSTS_MD_FILENAME

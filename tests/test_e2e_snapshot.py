@@ -116,6 +116,8 @@ def test_snapshot_run_report_counts(
         "drafts_passed": 1,
         "drafts_failed": 0,
         "drafts_gate_absent": 0,
+        "drafts_provenance_invalid": 0,
+        "drafts_below_floor": 0,
     }
 
 

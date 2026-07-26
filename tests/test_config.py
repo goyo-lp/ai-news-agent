@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
-from app.config import Settings
+from app.config import Settings, configure_langsmith_env
 
 
 def test_missing_required_runtime_fields_requires_telegram_creds_when_not_dry_run() -> None:
@@ -249,3 +251,67 @@ def test_news_bot_profile_whitespace_eveywhere_is_not_configured() -> None:
         telegram_chat_id="   ",
     )
     assert settings.bot_profile("news") is None
+
+
+def test_configure_langsmith_env_clears_langsmiths_env_var_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``langsmith.utils.get_env_var`` — which ``tracing_is_enabled()`` and
+    ``get_tracer_project()`` both call — is ``@lru_cache``d. Importing
+    langgraph/deepagents (which every real process does before this function
+    ever runs) can trigger that first, cached read while LANGSMITH_TRACING is
+    still unset; setting the env var afterwards is then a no-op unless the
+    cache is cleared too, which is what regressed here in the first place.
+
+    This only spies on ``cache_clear`` rather than actually flipping global
+    tracing state end-to-end: doing that inside the shared pytest process was
+    tried and confirmed real — it left LangSmith's tracer enabled for every
+    later test in the run, which then tried (and failed) to submit real
+    traces to LangSmith using this test's fake key. Checking that our code
+    calls the documented mitigation is the safe version of the same pin."""
+    from langsmith.utils import get_env_var, get_tracer_project
+
+    calls: list[str] = []
+    monkeypatch.setattr(get_env_var, "cache_clear", lambda: calls.append("get_env_var"))
+    monkeypatch.setattr(get_tracer_project, "cache_clear", lambda: calls.append("get_tracer_project"))
+
+    # configure_langsmith_env sets these directly via os.environ[...] = ..., not
+    # through monkeypatch, so register them here first to get an auto-revert.
+    for key in ("LANGSMITH_TRACING", "LANGSMITH_API_KEY", "LANGSMITH_PROJECT"):
+        monkeypatch.delenv(key, raising=False)
+
+    settings = Settings(
+        _env_file=None,
+        langsmith_api_key="test-key",
+        langsmith_project="test-project",
+        langsmith_tracing=True,
+    )
+    configure_langsmith_env(settings)
+
+    assert "get_env_var" in calls
+    assert "get_tracer_project" in calls
+
+
+def test_configure_langsmith_env_mirrors_endpoint_when_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LANGSMITH_ENDPOINT matters for non-default (e.g. EU) workspaces — an
+    API key issued for one region is rejected by the other. Left unset, the
+    langsmith SDK's own default (the US endpoint) applies."""
+    monkeypatch.delenv("LANGSMITH_ENDPOINT", raising=False)
+
+    settings = Settings(_env_file=None, langsmith_endpoint="https://eu.api.smith.langchain.com")
+    configure_langsmith_env(settings)
+
+    assert os.environ["LANGSMITH_ENDPOINT"] == "https://eu.api.smith.langchain.com"
+
+
+def test_configure_langsmith_env_leaves_endpoint_unset_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LANGSMITH_ENDPOINT", raising=False)
+
+    settings = Settings(_env_file=None)
+    configure_langsmith_env(settings)
+
+    assert "LANGSMITH_ENDPOINT" not in os.environ

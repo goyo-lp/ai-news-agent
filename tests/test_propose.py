@@ -64,7 +64,28 @@ def _wire_scripted_propose(
 ) -> None:
     """Point `propose` at the tmp settings + a scripted coordinator (no network)."""
     monkeypatch.setattr(main, "get_settings", lambda: settings)
-    monkeypatch.setattr(main, "_ensure_searxng", lambda settings: None)
+
+    async def _noop_searxng(_s: Settings) -> None:
+        return None
+
+    monkeypatch.setattr(main, "_ensure_searxng", _noop_searxng)
+    monkeypatch.setattr(main, "_ensure_style_profile", _noop_searxng)
+
+    # Scripted-model drafts bypass submit_draft, so they lack provenance
+    # signatures, and the script doesn't write briefs for citation-fidelity
+    # checks. Bypass these checks for propose-level CLI tests.
+    import app.orchestrator.tools.telegram as telegram_mod
+    import app.orchestrator.tools.export as export_mod
+    import app.orchestrator.tools.quality as quality_mod
+    import app.orchestrator.services.evidence_floor as floor_mod
+
+    monkeypatch.setattr(telegram_mod, "verify_draft", lambda _raw, _settings: True)
+    monkeypatch.setattr(telegram_mod, "meets_evidence_floor", lambda _b, _s: (True, ""))
+    monkeypatch.setattr(telegram_mod, "_check_evidence_floor", lambda _s, _p: (True, ""))
+    monkeypatch.setattr(export_mod, "verify_draft", lambda _raw, _settings: True)
+    monkeypatch.setattr(export_mod, "meets_evidence_floor", lambda _b, _s: (True, ""))
+    monkeypatch.setattr(floor_mod, "meets_evidence_floor", lambda _b, _s: (True, ""))
+    monkeypatch.setattr(quality_mod, "citation_fidelity_reasons", lambda _p, _b: [])
     mock_run_curation_one_article(fixture_article("topic-a"), monkeypatch)
 
     def _fake_build(s: Settings) -> object:
@@ -81,7 +102,7 @@ def test_propose_drives_agent_and_exports_bundle(
     settings = _settings(tmp_path)
     _wire_scripted_propose(tmp_path, monkeypatch, settings, _full_run_script(tmp_path))
 
-    exit_code = asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=False)))
+    exit_code = asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=False, legacy_coordinator=True)))
 
     assert exit_code == 0
     # The coordinator produced a passing draft + gate verdict on disk.
@@ -128,20 +149,20 @@ def test_propose_refuses_to_clobber_same_day_bundle_without_force(
 
     # First run succeeds and writes today's bundle.
     _wire_scripted_propose(tmp_path, monkeypatch, settings, _full_run_script(tmp_path))
-    assert asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=False))) == 0
+    assert asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=False, legacy_coordinator=True))) == 0
     capsys.readouterr()  # drain
     after_first_run = len(sends)
 
     # Second run, no --force: export refuses -> exit 1 with the --force hint, and
     # delivery is unreachable, so the refused run posts nothing.
     _wire_scripted_propose(tmp_path, monkeypatch, settings, _full_run_script(tmp_path))
-    assert asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=False))) == 1
+    assert asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=False, legacy_coordinator=True))) == 1
     assert "--force" in capsys.readouterr().out
     assert len(sends) == after_first_run  # refused run sent nothing
 
     # Third run, --force: overwrites deliberately -> exit 0.
     _wire_scripted_propose(tmp_path, monkeypatch, settings, _full_run_script(tmp_path))
-    assert asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=True, dry_run=False))) == 0
+    assert asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=True, dry_run=False, legacy_coordinator=True))) == 0
     assert "Proposals exported to" in capsys.readouterr().out
 
 
@@ -167,12 +188,12 @@ def test_propose_delivers_passing_draft_to_linkedin_bot(
         "app.services.telegram_client.TelegramClient.send_message", _fake_send
     )
 
-    exit_code = asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=False)))
+    exit_code = asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=False, legacy_coordinator=True)))
 
     assert exit_code == 0
     assert len(sends) == 1
     assert sends[0]["bot"] == "linkedin"
-    assert sends[0]["dry_run"] is False  # real send, creds present
+    assert sends[0]["dry_run"] is False
     assert "Delivered 1/1 proposal(s) to the linkedin bot" in capsys.readouterr().out
 
 
@@ -198,7 +219,7 @@ def test_propose_dry_run_skips_telegram_delivery(
         "app.services.telegram_client.TelegramClient.send_message", _fake_send
     )
 
-    exit_code = asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=True)))
+    exit_code = asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=True, legacy_coordinator=True)))
 
     assert exit_code == 0
     assert calls == []  # no Telegram send
@@ -251,7 +272,7 @@ def test_propose_clears_stale_drafts_before_delivery(
     _wire_scripted_propose(tmp_path, monkeypatch, settings, _full_run_script(tmp_path))
     sends = _capture_sends(monkeypatch)
 
-    exit_code = asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=False)))
+    exit_code = asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=False, legacy_coordinator=True)))
 
     assert exit_code == 0
     # Only this run's draft (post-1) was sent; the stale one was wiped, not sent.
@@ -287,7 +308,7 @@ def test_propose_delivers_only_gate_passed_drafts(
     _wire_scripted_propose(tmp_path, monkeypatch, settings, script)
     sends = _capture_sends(monkeypatch)
 
-    exit_code = asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=False)))
+    exit_code = asyncio.run(main.run_propose(argparse.Namespace(verbose=False, force=False, dry_run=False, legacy_coordinator=True)))
 
     assert exit_code == 0
     assert len(sends) == 1  # only the passing draft

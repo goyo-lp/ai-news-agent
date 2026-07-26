@@ -58,6 +58,31 @@ def _write_draft(tmp_path: Path, post_id: str, proposal: PostProposal) -> None:
     )
 
 
+def _write_brief(tmp_path: Path, topic_id: str = "t1") -> None:
+    """Stage a verified brief whose citations cover the fixture proposal's
+    citation_urls (https://example.com/a) — the citation-fidelity check the
+    gate now runs needs a brief on disk to trace against."""
+    briefs = tmp_path / "briefs"
+    briefs.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "topic_id": topic_id,
+        "headline": "Fixture brief",
+        "summary": "Fixture summary.",
+        "technical_significance": "Fixture.",
+        "business_impact": "Fixture.",
+        "why_now": "Fixture.",
+        "key_points": [],
+        "risks": [],
+        "citations": [
+            {"title": "Source A", "url": "https://example.com/a", "domain": "example.com"}
+        ],
+        "verification_status": "verified",
+        "verification_confidence": 0.9,
+        "verification_notes": [],
+    }
+    (briefs / f"{topic_id}.verified.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
 # --- write/read helpers -----------------------------------------------------
 
 
@@ -123,6 +148,7 @@ async def test_tool_passes_clean_draft_and_writes_verdict(
     settings = _settings(tmp_path)
     tool = build_quality_gate_tool(settings)
     _write_draft(tmp_path, "post-1", _proposal(body=_words(120)))
+    _write_brief(tmp_path)
 
     result = json.loads(await tool.ainvoke({"post_id": "post-1"}))
 
@@ -248,6 +274,7 @@ async def test_tool_and_service_agree_on_clean_in_window_draft(
     tool = build_quality_gate_tool(settings)
     proposal = _proposal(body=_words(120))
     _write_draft(tmp_path, "post-1", proposal)
+    _write_brief(tmp_path)
 
     tool_result = json.loads(await tool.ainvoke({"post_id": "post-1"}))
     service_result = check_proposal(proposal)

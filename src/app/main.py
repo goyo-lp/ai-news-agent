@@ -6,7 +6,6 @@ import json
 import logging
 import shutil
 import subprocess
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -77,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     propose_parser = subparsers.add_parser(
         "propose",
-        help="Drive the coordinator deep agent to produce LinkedIn post proposals (writes a file bundle)",
+        help="Produce LinkedIn post proposals via the deterministic spine (fetch→rank→veto→research→write) and export a file bundle",
     )
     propose_parser.add_argument(
         "--force",
@@ -88,6 +87,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Produce + export proposals but do NOT send them to the LinkedIn Telegram bot",
+    )
+    propose_parser.add_argument(
+        "--legacy-coordinator",
+        action="store_true",
+        help=(
+            "Use the legacy LLM-planner coordinator deep agent instead of the "
+            "default deterministic spine (kept for comparison/debugging)"
+        ),
     )
     propose_parser.add_argument("--verbose", action="store_true", help="Enable debug logs")
 
@@ -101,6 +108,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Overwrite today's existing export bundle instead of refusing",
+    )
+    both_parser.add_argument(
+        "--legacy-coordinator",
+        action="store_true",
+        help="Run the propose lane with the legacy LLM-planner coordinator",
     )
     both_parser.add_argument("--verbose", action="store_true", help="Enable debug logs")
 
@@ -188,21 +200,66 @@ async def run_curation(
 
 _SEARXNG_COMPOSE_FILE = Path(__file__).resolve().parents[2] / "docker-compose.searxng.yml"
 _SEARXNG_DEFAULT_URL = "http://localhost:8080"
+_SEARXNG_PROBE_QUERY = "OpenAI"
 
 
-def _ensure_searxng(settings: Settings) -> None:
+async def _probe_searxng(settings: Settings) -> int:
+    """Run one real search against the configured instance and log the result
+    count loudly. The 2026-07-25 run wasted 57 web_search calls on an
+    instance that was silently returning zero results — nobody noticed until
+    trace review. A 0-result probe now surfaces at run start; per-query
+    empties during the run are handled by web_search's circuit breaker.
+    Returns the probe's result count (0 also when the probe itself fails)."""
+    from app.orchestrator.services.searxng_client import SearxngClient
+
+    client = SearxngClient(settings)
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(settings.request_timeout_seconds)) as http:
+            items = await client.search_news(
+                client=http,
+                query=_SEARXNG_PROBE_QUERY,
+                # Month bucket: the probe checks engine health, not recency.
+                hours_back=24 * 31,
+                max_results=5,
+                dry_run=False,
+            )
+    except Exception as exc:
+        logger.warning(
+            "SearXNG probe failed (%s) — search evidence this run may be degraded.",
+            exc,
+        )
+        return 0
+    if items:
+        logger.info("SearXNG probe ok: %d result(s) for %r.", len(items), _SEARXNG_PROBE_QUERY)
+    else:
+        logger.warning(
+            "SearXNG probe returned 0 results for %r — the instance answers but "
+            "produces no results (engines disabled? rate-limited? wrong "
+            "categories?). Research corroboration will be degraded this run.",
+            _SEARXNG_PROBE_QUERY,
+        )
+    return len(items)
+
+
+async def _ensure_searxng(settings: Settings) -> None:
     """Best-effort auto-start of the self-hosted SearXNG instance
     (docker-compose.searxng.yml) so propose's web_search fallback does real
     corroborating searches instead of returning mock results. Only kicks in
     when SEARXNG_BASE_URL is unset — an operator already pointing it at their
-    own instance is left alone. Any failure here (no docker, container never
-    becomes healthy) just logs a warning; web_search's existing mock-result
-    mode is the fallback, not a hard error."""
+    own instance is left alone (but still probed). Any failure here (no
+    docker, container never becomes healthy) just logs a warning;
+    web_search's existing mock-result mode is the fallback, not a hard error.
+
+    Async-native: the compose call runs in a thread and the readiness poll
+    awaits instead of sleeping, so the event loop is never blocked (the old
+    sync version blocked it for up to ~75s inside run_propose)."""
     if (settings.searxng_base_url or "").strip():
+        await _probe_searxng(settings)
         return
 
     try:
-        subprocess.run(
+        await asyncio.to_thread(
+            subprocess.run,
             ["docker", "compose", "-f", str(_SEARXNG_COMPOSE_FILE), "up", "-d"],
             check=True,
             capture_output=True,
@@ -212,34 +269,71 @@ def _ensure_searxng(settings: Settings) -> None:
         logger.warning("Could not start SearXNG (%s) — web_search will use mock results.", exc)
         return
 
-    with httpx.Client(timeout=2) as client:
+    async with httpx.AsyncClient(timeout=2) as client:
         for _ in range(15):
             try:
-                if client.get(_SEARXNG_DEFAULT_URL).status_code == 200:
+                if (await client.get(_SEARXNG_DEFAULT_URL)).status_code == 200:
                     settings.searxng_base_url = _SEARXNG_DEFAULT_URL
                     logger.info("SearXNG ready at %s", _SEARXNG_DEFAULT_URL)
+                    await _probe_searxng(settings)
                     return
             except httpx.HTTPError:
                 pass
-            time.sleep(1)
+            await asyncio.sleep(1)
 
     logger.warning(
         "SearXNG container started but didn't become healthy in time — web_search will use mock results."
     )
 
 
-def _clear_run_workspace(settings: Settings) -> None:
-    """Remove the previous run's regenerated artifacts under
-    ``orchestrator_data_dir`` so this ``propose`` run — and its delivery — only
-    ever sees its own output. ``drafts/`` is a persistent dir; without this it
-    accumulates across days and the delivery loop re-sends prior runs' proposals
-    (duplicate posts). Inputs that live outside this dir (style profile, skills,
-    delivery history) are untouched."""
+def _archive_run_workspace(settings: Settings) -> Path | None:
+    """Move the previous run's regenerated artifacts under
+    ``orchestrator_data_dir`` out of the way so this ``propose`` run — and
+    its delivery — only ever sees its own output. ``drafts/`` is a
+    persistent dir; without this it accumulates across days and the
+    delivery loop re-sends prior runs' proposals (duplicate posts).
+
+    Archive, not delete (2026-07-26 hardening): the old ``_clear`` version
+    wiped the workspace *before* the run, so a crashed run left neither an
+    export nor the prior state to inspect — trace review of exactly such a
+    crash is what motivated this change. Artifacts move to
+    ``<data_dir>/.archive/<utc-timestamp>/`` (cheap same-filesystem rename).
+    Inputs that live outside this dir (style seed, skills, delivery
+    history) are untouched; the generated ``style_profile.json`` inside it
+    deliberately stays. Returns the archive dir when anything was moved."""
     data_dir = Path(settings.orchestrator_data_dir)
-    for filename in (state.ARTICLES_FILENAME, state.TOPICS_FILENAME):
-        (data_dir / filename).unlink(missing_ok=True)
-    for subdir in (state.BRIEFS_DIRNAME, state.DRAFTS_DIRNAME):
-        shutil.rmtree(data_dir / subdir, ignore_errors=True)
+    targets = [
+        data_dir / state.ARTICLES_FILENAME,
+        data_dir / state.TOPICS_FILENAME,
+        data_dir / state.BRIEFS_DIRNAME,
+        data_dir / state.DRAFTS_DIRNAME,
+        data_dir / "web",
+    ]
+    existing = [t for t in targets if t.exists()]
+    if not existing:
+        return None
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    archive_dir = data_dir / ".archive" / stamp
+    archive_dir.mkdir(parents=True, exist_ok=False)
+    for target in existing:
+        shutil.move(str(target), archive_dir / target.name)
+    logger.info("Archived prior run workspace to %s", archive_dir)
+    return archive_dir
+
+
+async def _ensure_style_profile(settings: Settings) -> None:
+    """Guarantee ``style_profile.json`` exists in the data dir before the
+    writer runs. The load_style_profile tool used to be orphaned — nothing
+    in any live path called it, so the writer was told to read a file that
+    never existed. Now the CLI resolves it up front (seed profile, else the
+    built-in default; ``rebuild`` stays an offline operator action)."""
+    from app.orchestrator.tools.style import _load_and_write
+
+    result = await _load_and_write(False, settings)
+    if result.get("status") == "ok":
+        logger.info("Style profile ready (source=%s)", result.get("source"))
+    else:
+        logger.warning("Style profile resolution failed: %s", result.get("reason"))
 
 
 async def _deliver_proposals(settings: Settings) -> list[dict[str, Any]]:
@@ -263,20 +357,23 @@ async def _deliver_proposals(settings: Settings) -> list[dict[str, Any]]:
 
 
 async def run_propose(args: argparse.Namespace) -> int:
-    """Drive the coordinator deep agent for one run, deliver the passing
-    proposals to the LinkedIn Telegram bot, and export the run bundle.
+    """Produce LinkedIn post proposals for one run, deliver the passing ones
+    to the LinkedIn Telegram bot, and export the run bundle.
 
-    This is the LinkedIn-proposal path (Decision H: manual CLI). The coordinator
-    planner + its research / writer subagents call OpenRouter, so a real key is
-    required — the run is gated on it (exit 2) rather than failing mid-flight
-    with a 401. The run is wrapped in the P7.2 usage tracker + tagged with the
-    P7.1 trace config.
+    Default path is the deterministic spine (fetch → rank → editor veto →
+    diversity-capped selection → research fan-out with per-topic timeouts →
+    evidence floor → writer fan-out); ``--legacy-coordinator`` keeps the old
+    LLM-planner deep agent for comparison. Either way the research/writer
+    subagents call OpenRouter, so a real key is required — the run is gated
+    on it (exit 2) rather than failing mid-flight with a 401. The run is
+    wrapped in the P7.2 usage tracker.
 
-    The per-run workspace is cleared first so delivery only ever sees this run's
-    drafts. ``export_report`` is the run's commit record: only when it succeeds
-    are the passing drafts sent to the ``linkedin`` bot (Decision C). A same-day
-    re-run without ``--force`` therefore refuses AND doesn't re-post; ``--dry-run``
-    skips the Telegram send (the LLM still ran and spent).
+    The per-run workspace is archived first so delivery only ever sees this
+    run's drafts. ``export_report`` is the run's commit record: only when it
+    succeeds are the passing drafts sent to the ``linkedin`` bot (Decision C).
+    A same-day re-run without ``--force`` therefore refuses AND doesn't
+    re-post; ``--dry-run`` skips the Telegram send (the LLM still ran and
+    spent).
 
     Exit codes: 0 success, 1 export refused/failed (nothing delivered),
     2 config error.
@@ -292,32 +389,48 @@ async def run_propose(args: argparse.Namespace) -> int:
         print("Configuration error: missing required .env value: OPENROUTER_API_KEY")
         return 2
 
-    _ensure_searxng(settings)
+    await _ensure_searxng(settings)
 
-    # Run-scope the workspace: drafts/ is persistent, so without this a new run's
-    # delivery would re-send prior runs' proposals (duplicate posts).
-    _clear_run_workspace(settings)
+    # Run-scope the workspace: drafts/ is persistent, so without this a new
+    # run's delivery would re-send prior runs' proposals (duplicate posts).
+    # Archived, not deleted — a crashed run keeps its forensics.
+    _archive_run_workspace(settings)
+
+    # Voice input: style_profile.json must exist before any writer runs.
+    await _ensure_style_profile(settings)
 
     run_id = str(uuid4())
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    kickoff = (
-        f"Today is {today}. Produce up to {settings.max_topics_per_run} "
-        "LinkedIn post proposals per the system prompt."
-    )
 
     # Imported lazily to break a cycle: the coordinator pulls in the news tool,
     # which imports run_curation back from this module. The deeper issue is a
     # layering inversion — run_curation is domain logic living in the CLI
     # entrypoint; the clean fix (moving it to a non-entry module so tools/news
     # imports down, not up) belongs to the P8.4 cleanup, not this cutover PR.
-    from app.orchestrator.agent import build_coordinator_agent
+    from app.orchestrator.spine import run_propose_spine
 
-    agent = build_coordinator_agent(settings)
     with track_run_usage(run_id=run_id, dry_run=False) as usage:
-        await agent.ainvoke(
-            {"messages": [{"role": "user", "content": kickoff}]},
-            coordinator_run_config(run_id=run_id, dry_run=False),
-        )
+        if bool(getattr(args, "legacy_coordinator", False)):
+            # Legacy path: the LLM-planner coordinator deep agent. Kept for
+            # comparison/debugging; the deterministic spine is the default.
+            from app.orchestrator.agent import build_coordinator_agent
+
+            kickoff = (
+                f"Today is {today}. Produce up to {settings.max_topics_per_run} "
+                "LinkedIn post proposals per the system prompt."
+            )
+            agent = build_coordinator_agent(settings)
+            await agent.ainvoke(
+                {"messages": [{"role": "user", "content": kickoff}]},
+                coordinator_run_config(run_id=run_id, dry_run=False),
+            )
+            spine_summary: dict[str, Any] | None = None
+        else:
+            spine_summary = await run_propose_spine(
+                settings,
+                run_id=run_id,
+                limit=getattr(args, "limit", None),
+            )
 
     export_tool = build_export_report_tool(settings)
     export_result = json.loads(await export_tool.ainvoke({"overwrite": bool(args.force)}))
@@ -325,6 +438,27 @@ async def run_propose(args: argparse.Namespace) -> int:
     usage_summary = format_run_usage(usage)
     logger.info("Run usage | %s", usage_summary)
     print(usage_summary)
+
+    if spine_summary is not None:
+        # The spine's own honesty log: what was selected, vetoed, floored
+        # out, and gated — the numbers the run_report then corroborates.
+        print(
+            "Spine: "
+            f"selected={len(spine_summary.get('selected', []))} "
+            f"vetoed={len(spine_summary.get('vetoed', []))} "
+            f"floored_out={len(spine_summary.get('skipped_floor', []))} "
+            f"drafts_gated={spine_summary.get('drafts_passed', 0)}"
+            f"/{len(spine_summary.get('written', []))} "
+            f"status={spine_summary.get('status')}"
+        )
+        for skipped in spine_summary.get("skipped_floor", []):
+            print(f"  - floored out {skipped['topic_id']}: {skipped['reason']}")
+        for written in spine_summary.get("written", []):
+            if not written.get("gate_passed"):
+                print(
+                    f"  - {written['post_id']}: writer={written['writer_status']} "
+                    "gate=not passed"
+                )
 
     # Export is the run's commit record. If it refuses (a same-day bundle
     # already exists and --force wasn't passed) or fails, do NOT deliver — that

@@ -32,7 +32,7 @@ def test_subagent_core_shape() -> None:
 
 def test_subagent_carries_only_the_quality_gate_tool() -> None:
     sub = build_writer_subagent(_settings())
-    assert {t.name for t in sub["tools"]} == {"quality_gate"}
+    assert {t.name for t in sub["tools"]} == {"submit_draft", "quality_gate"}
 
 
 def test_subagent_uses_stage_b_writer_model() -> None:
@@ -87,7 +87,7 @@ def test_prompt_states_the_gate_constraints() -> None:
 def test_prompt_states_the_file_io_contract() -> None:
     prompt = build_writer_subagent(_settings())["system_prompt"]
     assert "briefs/<topic_id>.verified.json" in prompt
-    assert "drafts/<post_id>.json" in prompt
+    assert "submit_draft" in prompt
     assert "style_profile.json" in prompt
     assert "linkedin-voice" in prompt
 
@@ -98,5 +98,4 @@ def test_prompt_interpolates_absolute_data_dir_into_io_paths(tmp_path) -> None:
     read_file/write_file resolve on the mounted filesystem."""
     data_dir = str(tmp_path.resolve())
     prompt = build_writer_subagent(_settings(orchestrator_data_dir=data_dir))["system_prompt"]
-    assert f"{data_dir}/drafts/<post_id>.json" in prompt
     assert f"{data_dir}/briefs/<topic_id>.verified.json" in prompt

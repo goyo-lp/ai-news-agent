@@ -100,7 +100,29 @@ async def _rank_and_write(limit: int | None, settings: Settings) -> dict[str, An
     """Run the deterministic ranker over the curated articles file and persist
     the ranked topics. Returns the compressed summary that rides back to the
     LLM — the article/topic payloads stay on the filesystem."""
-    articles = _read_articles_from_state(settings.orchestrator_data_dir)
+    try:
+        articles = _read_articles_from_state(settings.orchestrator_data_dir)
+    except FileNotFoundError:
+        # Structured error, same philosophy as every sibling tool — an LLM
+        # calling rank before fetch sees a fixable status, not a raw raise.
+        return {
+            "count": 0,
+            "limit_used": 0,
+            "path": None,
+            "status": "error",
+            "reason": (
+                "articles.json not found — call fetch_curated_ai_news first "
+                "to stock the workspace before ranking"
+            ),
+        }
+    except Exception as exc:
+        return {
+            "count": 0,
+            "limit_used": 0,
+            "path": None,
+            "status": "error",
+            "reason": f"{type(exc).__name__}: {exc}",
+        }
     # No ceiling here beyond what's actually available — MAX_TOPICS_PER_RUN is
     # the coordinator's delegation cap, applied when it reads this file and
     # selects which topics to research, not a limit on what gets written.
@@ -134,6 +156,8 @@ async def _rank_and_write(limit: int | None, settings: Settings) -> dict[str, An
         "count": len(topics),
         "limit_used": limit_used,
         "path": str(path),
+        "status": "ok",
+        "reason": None,
     }
 
 

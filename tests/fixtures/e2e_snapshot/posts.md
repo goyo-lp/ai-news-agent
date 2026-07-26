@@ -11,4 +11,4 @@ Stable Diffusion 3.5 ships a new attention mechanism that lowers the real cost o
 
 **Briefs:** topic-a
 
-**Gate:** passed
+**Gate:** passed | **Provenance:** signed | **Evidence:** floor-ok

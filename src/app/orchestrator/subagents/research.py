@@ -25,20 +25,26 @@ only holds when the coordinator mounts a real ``FilesystemBackend`` rooted at
 state and every verify comes back "brief not found". P5 owns wiring that
 backend; this module owns the spec.
 
-Scope note (per-topic timeout): a SubAgent spec has no runtime loop of its own,
-so a per-topic wall-clock timeout is enforced by the coordinator that owns the
-``task()`` delegation (P5), where ``asyncio.wait_for`` can bound one topic's
-research. This module owns the spec; the coordinator owns the clock.
+Scope note (per-topic timeout): a SubAgent spec has no runtime loop of its
+own, so a per-topic wall-clock timeout is enforced by whoever drives the
+delegation. The deterministic spine (``app.orchestrator.spine`` — the default
+propose path) wraps each invocation in ``asyncio.wait_for`` bounded by
+``settings.research_task_timeout_seconds``; the legacy LLM-coordinator path
+has no such bound. This module owns the spec; the driver owns the clock.
 """
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
-from deepagents import SubAgent
+from deepagents import SubAgent, create_deep_agent
+from langchain_core.language_models.chat_models import BaseChatModel
+from langgraph.graph.state import CompiledStateGraph
 
 from app.config import Settings, get_settings
 from app.orchestrator.models import build_openrouter_chat_model
 from app.orchestrator.schemas import ResearchBrief
+from app.orchestrator.state import build_orchestrator_backend
 from app.orchestrator.tools.fetch import build_fetch_article_tool
 from app.orchestrator.tools.web import (
     build_web_extract_tool,
@@ -87,7 +93,9 @@ Work adaptively — you decide the sequence:
    they need no search. Run `web_extract` on them. Only when they are missing or
    too thin should you fall back to `web_search` for the claim and then
    `web_extract` the most relevant results. Read artifacts from the returned
-   `path`.
+   `path`. If `web_search` returns status="circuit_open", the search backend is
+   returning empty results — do NOT search again this topic; rely on
+   `fetch_article` + `web_extract` of the URLs you already have.
 3. Synthesize the brief. Extract what is *technically* new — a capability, a
    result, a shift — not marketing. Ground every claim in something you fetched
    or searched; never invent numbers, quotes, capabilities, or URLs. Cite only
@@ -98,7 +106,10 @@ Work adaptively — you decide the sequence:
 5. Call `verify_claim` with the topic_id. It checks the brief against
    independent evidence and writes `{data_dir}/briefs/<topic_id>.verified.json`
    itself. If it reports insufficient evidence, soften the affected claims in
-   the brief and re-verify rather than overstating.
+   the brief and re-verify ONCE rather than overstating. `verify_claim` enforces
+   a hard attempt budget per topic — when it returns
+   status="attempts_exhausted", stop re-verifying and return with the verdict
+   you have.
 
 Rules:
 - The brief file is your deliverable, not your chat reply. Return only a short
@@ -137,4 +148,33 @@ def build_research_subagent(settings: Settings | None = None) -> SubAgent:
         model=build_openrouter_chat_model(
             s, model=s.openrouter_stage_b_research_model
         ),
+    )
+
+
+def build_research_agent(
+    settings: Settings | None = None,
+    *,
+    model: BaseChatModel | None = None,
+) -> CompiledStateGraph[Any, Any, Any, Any]:
+    """Build the researcher as a standalone runnable deep agent (no
+    coordinator).
+
+    The deterministic spine (``app.orchestrator.spine``) invokes this directly
+    once per topic — same prompt, same four research tools, same model tier as
+    the ``task()``-delegated spec, but the delegation boundary and per-topic
+    timeout live in code. ``model`` is the seam tests use to inject a fake."""
+    s = settings or get_settings()
+    data_dir = str(Path(s.orchestrator_data_dir).resolve())
+    return create_deep_agent(
+        model=model
+        or build_openrouter_chat_model(s, model=s.openrouter_stage_b_research_model),
+        tools=[
+            build_fetch_article_tool(s),
+            build_web_search_tool(s),
+            build_web_extract_tool(s),
+            build_verify_claim_tool(s),
+        ],
+        backend=build_orchestrator_backend(s),
+        system_prompt=_system_prompt(data_dir),
+        name=RESEARCH_SUBAGENT_NAME,
     )
