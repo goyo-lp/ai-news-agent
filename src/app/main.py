@@ -46,7 +46,8 @@ class ProposeOptions:
     Deliberately has no ``limit``: the digest's ``--limit`` caps how many
     articles get *sent to the news bot* and has no meaning for proposal
     production, so `both` does not thread it across. Proposal volume is governed
-    by ``max_topics_per_run``.
+    by ``max_topics_per_run`` (topics per wave) and ``min_drafts_per_run`` (the
+    backfill target the spine keeps drawing more waves to reach).
     """
 
     force: bool = False

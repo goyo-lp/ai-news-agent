@@ -60,6 +60,23 @@ class Settings(BaseSettings):
     # its consumer (P2.1); the coordinator also reads this when delegating.
     max_topics_per_run: int = 5
 
+    # Target number of gated (passed) drafts per run, and the backfill it
+    # drives. technical_rank already writes every viable topic to topics.json
+    # (not pre-cut to max_topics_per_run); the spine used to select exactly
+    # max_topics_per_run of them ONCE and ship whatever survived research +
+    # the evidence floor. On 2026-07-26 that meant a 20-topic day selected 5,
+    # lost 4 to the floor/a rate limit, and shipped 1 — while 15 more vetted
+    # candidates sat unused in the pool the whole time. The spine now keeps
+    # drawing more topics (max_topics_per_run at a time) from that same pool
+    # until either min_drafts_per_run passing drafts are produced or the pool
+    # runs out.
+    min_drafts_per_run: int = 5
+    # Hard ceiling on total topics attempted per run across every backfill
+    # wave, independent of min_drafts_per_run and of how large the day's
+    # vetted pool happens to be — the explicit worst-case bound on research
+    # spend/wall-clock when the target can't be reached.
+    max_topic_attempts_per_run: int = 20
+
     # SearXNG research-evidence knobs. Search runs against a self-hosted SearXNG
     # instance (keyless, no billing) — the operator points searxng_base_url at
     # their instance (see docker-compose.searxng.yml). Per Decision E this stays

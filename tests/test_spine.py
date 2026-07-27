@@ -313,16 +313,115 @@ def test_spine_respects_the_topic_cap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """max_topics_per_run caps delegation in code — two rankable articles, a
-    cap of 1, one research call."""
-    settings = settings_for(tmp_path, max_topics_per_run=1)
+    cap of 1, one research call.
+
+    min_drafts_per_run=1 pins the target to "first success ends the run" so
+    this test isolates the per-wave cap from the backfill loop below: with the
+    real default of 5, topic-a's pass wouldn't meet the target and the spine
+    would correctly go on to research topic-b too — that's the point of
+    backfill, not a violation of this cap.
+    """
+    settings = settings_for(tmp_path, max_topics_per_run=1, min_drafts_per_run=1)
     mock_run_curation(
-        [fixture_article("topic-a"), fixture_article("topic-b")], monkeypatch
+        [
+            fixture_article("topic-a", title="Stable Diffusion 3.5 releases new attention mechanism"),
+            fixture_article("topic-b", title="Anthropic launches Claude Opus 5 for coding agents"),
+        ],
+        monkeypatch,
     )
 
     summary, research, _writer = _run(settings, monkeypatch)
 
     assert len(summary.selected) == 1
     assert len(research.calls) == 1
+
+
+def test_spine_backfills_from_the_vetoed_pool_to_reach_the_draft_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """min_drafts_per_run keeps drawing MORE topics from the same vetoed pool
+    across waves when earlier ones don't reach the target on their own — the
+    2026-07-26 production gap: a 20-topic day selected 5, lost 4 to the floor
+    or a rate limit, and the other 15 vetted candidates sat unused. Forcing
+    max_topics_per_run=1 with a target of 3 means all 3 topics MUST be
+    attempted to satisfy the target, regardless of which one technical_rank
+    happens to order first — the test doesn't depend on tie-breaking."""
+    settings = settings_for(tmp_path, max_topics_per_run=1, min_drafts_per_run=3)
+    mock_run_curation(
+        [
+            fixture_article("topic-a", title="Stable Diffusion 3.5 releases new attention mechanism"),
+            fixture_article("topic-b", title="Anthropic launches Claude Opus 5 for coding agents"),
+            fixture_article("topic-c", title="OpenAI ships GPT-5.6 preview with faster inference"),
+        ],
+        monkeypatch,
+    )
+
+    summary, research, writer = _run(settings, monkeypatch)
+
+    assert summary.status == "ok"
+    assert summary.drafts_passed == 3
+    assert len(summary.selected) == 3
+    assert len(research.calls) == 3
+    assert len(writer.calls) == 3
+
+
+def test_spine_stops_backfilling_once_the_pool_is_exhausted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A target the day's pool cannot supply must not loop forever — once
+    every vetted candidate has been tried and none cleared the floor, the
+    spine reports what actually happened instead of spinning."""
+    settings = settings_for(tmp_path, max_topics_per_run=1, min_drafts_per_run=5)
+    mock_run_curation(
+        [
+            fixture_article("topic-a", title="Stable Diffusion 3.5 releases new attention mechanism"),
+            fixture_article("topic-b", title="Anthropic launches Claude Opus 5 for coding agents"),
+        ],
+        monkeypatch,
+    )
+    research = StubResearchAgent(
+        settings, brief_kwargs={"verification_status": "insufficient_evidence"}
+    )
+
+    summary, _research, writer = _run(settings, monkeypatch, research=research)
+
+    assert summary.status == "nothing_above_floor"
+    assert len(summary.selected) == 2
+    assert len(research.calls) == 2
+    assert writer.calls == []
+
+
+def test_spine_max_topic_attempts_per_run_bounds_a_hopeless_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unreachable target must not run up the whole day's pool — the
+    attempts ceiling is the explicit worst-case cost/time bound, independent
+    of both the target and how many candidates happen to be available."""
+    settings = settings_for(
+        tmp_path,
+        max_topics_per_run=1,
+        min_drafts_per_run=10,
+        max_topic_attempts_per_run=2,
+    )
+    mock_run_curation(
+        [
+            fixture_article("topic-a", title="Stable Diffusion 3.5 releases new attention mechanism"),
+            fixture_article("topic-b", title="Anthropic launches Claude Opus 5 for coding agents"),
+            fixture_article("topic-c", title="OpenAI ships GPT-5.6 preview with faster inference"),
+            fixture_article("topic-d", title="Meta releases Llama 5 open-weight model family"),
+            fixture_article("topic-e", title="Mistral launches a new agentic coding model"),
+        ],
+        monkeypatch,
+    )
+    research = StubResearchAgent(
+        settings, brief_kwargs={"verification_status": "insufficient_evidence"}
+    )
+
+    summary, _research, writer = _run(settings, monkeypatch, research=research)
+
+    assert summary.status == "nothing_above_floor"
+    assert len(research.calls) == 2
+    assert writer.calls == []
 
 
 def test_spine_times_out_a_slow_subagent(

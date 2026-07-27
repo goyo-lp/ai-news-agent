@@ -4,7 +4,8 @@ Replaces the LLM-planner coordinator for the standard path:
 
     fetch_curated_ai_news → technical_rank → editor veto → select (cap +
     domain diversity) → research fan-out (per-topic timeout) → evidence
-    floor → writer fan-out (per-topic timeout) → report
+    floor → writer fan-out (per-topic timeout) → repeat until
+    min_drafts_per_run pass or the pool is exhausted → report
 
 LLM judgment stays exactly where it earns its tokens: one batched editorial
 veto at selection, research synthesis inside the research subagent, and the
@@ -299,92 +300,126 @@ async def run_propose_spine(
     if not topics:
         return _stop(result, "no_topics")
 
-    # 3. Editorial veto over the whole pool (one batched LLM call, fail-open),
-    # then deterministic diversity-aware selection under the cap — the cap is
-    # enforced HERE, in code, not in a prompt.
+    # 3. Editorial veto over the whole pool (one batched LLM call, fail-open).
+    # Everything downstream draws from this same `pool` across every backfill
+    # wave — diversity-aware selection under the per-wave cap is enforced by
+    # select_topics(), in code, not in a prompt.
     llm_unavailable = not (settings.openrouter_api_key or "").strip()
     pool, vetoes = await veto_irrelevant_topics(
         topics, settings, dry_run=llm_unavailable
     )
     result.vetoed = vetoes
-
-    selected = select_topics(pool, max(1, settings.max_topics_per_run))
-    result.selected = [
-        SelectedTopic(
-            topic_id=t.topic_id, title=t.title, domain=t.primary_domain, score=t.score
-        )
-        for t in selected
-    ]
-    if not selected:
+    if not pool:
         return _stop(result, "no_selection")
 
-    # 4. Research fan-out — concurrent, each task hard-bounded by
-    # research_task_timeout_seconds. This is the code-side enforcement the
-    # research subagent's docstring always referenced.
+    # 4-6. Research -> evidence floor -> write, in waves. One wave selects up
+    # to max_topics_per_run topics this run hasn't attempted yet from `pool`;
+    # if fewer than min_drafts_per_run have passed the gate afterward and
+    # candidates remain, another wave draws MORE from the same already-vetted
+    # pool instead of settling for whatever the first wave produced — this is
+    # the backfill the 2026-07-25 trace was missing: a 20-topic day selected
+    # 5, lost 4 to the floor, and the other 15 vetted candidates sat unused.
+    # Bounded by `pool`'s own size (that day's news, naturally finite) and, as
+    # an explicit worst-case backstop, by max_topic_attempts_per_run.
     researcher = research_agent or build_research_agent(settings)
-    result.research = await _fan_out(
-        researcher,
-        [(t.topic_id, _research_description(t)) for t in selected],
-        timeout_seconds=settings.research_task_timeout_seconds,
-    )
-
-    # 5. Evidence floor — only floored topics may be drafted. This is the
-    # deterministic version of the coordinator's "skip insufficient_evidence"
-    # prose rule, now with teeth: confidence + citation breadth thresholds.
-    writable: list[TopicCandidate] = []
-    for topic in selected:
-        brief = state.read_brief(topic.topic_id, settings.orchestrator_data_dir)
-        if brief is None:
-            result.skipped_floor.append(
-                SkippedTopic(topic_id=topic.topic_id, reason="no brief on disk")
-            )
-            continue
-        passes, why = meets_evidence_floor(brief, settings)
-        if passes:
-            writable.append(topic)
-        else:
-            result.skipped_floor.append(SkippedTopic(topic_id=topic.topic_id, reason=why))
-    if not writable:
-        return _stop(result, "nothing_above_floor")
-
-    # 6. Writer fan-out — concurrent, hard-bounded, deterministic post_ids.
     writer = writer_agent or build_writer_agent(settings)
     date_slug = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     taken: set[str] = set()
-    assignments = [(topic, post_id_for(topic.title, date_slug, taken)) for topic in writable]
-    write_results = await _fan_out(
-        writer,
-        [(topic.topic_id, _writer_description(topic.topic_id, post_id)) for topic, post_id in assignments],
-        timeout_seconds=settings.writer_task_timeout_seconds,
-    )
+    attempted: set[str] = set()
+    target = max(1, settings.min_drafts_per_run)
+    batch_cap = max(1, settings.max_topics_per_run)
+    attempt_ceiling = max(batch_cap, settings.max_topic_attempts_per_run)
 
-    # 7. Report each draft's gate verdict from disk. The delivery layer
-    # re-certifies everything anyway; this is the run summary's honesty check,
-    # and it reads the verdict through the same loader delivery uses so the two
-    # can't disagree about what "gated" means.
-    for (topic, post_id), outcome in zip(assignments, write_results, strict=True):
-        try:
-            gate_passed = load_draft(post_id, settings.orchestrator_data_dir).gate_passed
-        except DraftLoadError as exc:
-            logger.warning("spine: no readable draft for %s: %s", post_id, exc)
-            gate_passed = None
-        result.written.append(
-            WrittenPost(
-                topic_id=topic.topic_id,
-                post_id=post_id,
-                writer_status=outcome.status,
-                gate_passed=gate_passed is True,
+    while result.drafts_passed < target and len(attempted) < attempt_ceiling:
+        candidates = [t for t in pool if t.topic_id not in attempted]
+        if not candidates:
+            break
+        batch = select_topics(candidates, min(batch_cap, attempt_ceiling - len(attempted)))
+        if not batch:
+            break
+        attempted.update(t.topic_id for t in batch)
+        result.selected.extend(
+            SelectedTopic(
+                topic_id=t.topic_id, title=t.title, domain=t.primary_domain, score=t.score
+            )
+            for t in batch
+        )
+
+        # Research fan-out — concurrent, each task hard-bounded by
+        # research_task_timeout_seconds. This is the code-side enforcement the
+        # research subagent's docstring always referenced.
+        result.research.extend(
+            await _fan_out(
+                researcher,
+                [(t.topic_id, _research_description(t)) for t in batch],
+                timeout_seconds=settings.research_task_timeout_seconds,
             )
         )
+
+        # Evidence floor — only floored topics may be drafted. This is the
+        # deterministic version of the coordinator's "skip insufficient_evidence"
+        # prose rule, now with teeth: confidence + citation breadth thresholds.
+        writable: list[TopicCandidate] = []
+        for topic in batch:
+            brief = state.read_brief(topic.topic_id, settings.orchestrator_data_dir)
+            if brief is None:
+                result.skipped_floor.append(
+                    SkippedTopic(topic_id=topic.topic_id, reason="no brief on disk")
+                )
+                continue
+            passes, why = meets_evidence_floor(brief, settings)
+            if passes:
+                writable.append(topic)
+            else:
+                result.skipped_floor.append(SkippedTopic(topic_id=topic.topic_id, reason=why))
+        if not writable:
+            continue
+
+        # Writer fan-out — concurrent, hard-bounded, deterministic post_ids.
+        assignments = [(topic, post_id_for(topic.title, date_slug, taken)) for topic in writable]
+        write_results = await _fan_out(
+            writer,
+            [
+                (topic.topic_id, _writer_description(topic.topic_id, post_id))
+                for topic, post_id in assignments
+            ],
+            timeout_seconds=settings.writer_task_timeout_seconds,
+        )
+
+        # Report each draft's gate verdict from disk. The delivery layer
+        # re-certifies everything anyway; this is the run summary's honesty
+        # check, and it reads the verdict through the same loader delivery
+        # uses so the two can't disagree about what "gated" means.
+        for (topic, post_id), outcome in zip(assignments, write_results, strict=True):
+            try:
+                gate_passed = load_draft(post_id, settings.orchestrator_data_dir).gate_passed
+            except DraftLoadError as exc:
+                logger.warning("spine: no readable draft for %s: %s", post_id, exc)
+                gate_passed = None
+            result.written.append(
+                WrittenPost(
+                    topic_id=topic.topic_id,
+                    post_id=post_id,
+                    writer_status=outcome.status,
+                    gate_passed=gate_passed is True,
+                )
+            )
+
+    if not result.written:
+        return _stop(result, "nothing_above_floor")
+
     logger.info(
-        "spine complete: %d fetched, %d topics, %d selected, %d vetoed, %d floored-out, %d/%d drafts gated",
+        "spine complete: %d fetched, %d topics, %d selected (%d attempted), %d vetoed, "
+        "%d floored-out, %d/%d drafts gated (target %d)",
         result.fetched,
         result.topics,
         len(result.selected),
+        len(attempted),
         len(result.vetoed),
         len(result.skipped_floor),
         result.drafts_passed,
         len(result.written),
+        target,
     )
     return _stop(result, "ok")
 

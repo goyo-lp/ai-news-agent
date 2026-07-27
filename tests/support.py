@@ -42,13 +42,22 @@ def settings_for(tmp_path: Path, **overrides: Any) -> Settings:
     return Settings(_env_file=None, **kwargs)
 
 
-def fixture_article(topic_id: str = "topic-a") -> CuratedArticle:
+def fixture_article(
+    topic_id: str = "topic-a",
+    *,
+    title: str = "Stable Diffusion 3.5 releases with new attention mechanism",
+) -> CuratedArticle:
     """A single CuratedArticle that survives technical_rank's hype-filter and
-    clustering into one topic — deterministic across runs."""
+    clustering into one topic — deterministic across runs.
+
+    Pass a distinct ``title`` when a test needs multiple genuinely separate
+    topics: technical_rank's clustering keys off title token overlap, not
+    id/url, so two calls with the default title collapse into one story
+    regardless of ``topic_id``."""
     return CuratedArticle(
         id=topic_id,
         source_name="Test Source",
-        title="Stable Diffusion 3.5 releases with new attention mechanism",
+        title=title,
         url=f"https://example.com/{topic_id}",
         summary="A new attention mechanism improving throughput of image models.",
         score=0.9,
