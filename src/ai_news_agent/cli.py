@@ -8,6 +8,12 @@ import structlog
 import typer
 
 from ai_news_agent.config import Settings
+from ai_news_agent.extraction import (
+    DEFAULT_MAX_BYTES as ARTICLE_MAX_BYTES,
+)
+from ai_news_agent.extraction import (
+    retrieve_articles,
+)
 from ai_news_agent.fixtures import load_sample_records
 from ai_news_agent.ingestion import (
     DEFAULT_MAX_BYTES,
@@ -21,6 +27,7 @@ from ai_news_agent.observability import (
     run_trace_smoke,
     tracing_scope,
 )
+from ai_news_agent.schemas import Article
 from ai_news_agent.sources import load_source_configs, load_sources_as_records
 from ai_news_agent.storage import SQLiteStore
 
@@ -140,6 +147,78 @@ def ingest(
         "tracing": "enabled" if settings.langsmith_tracing else "disabled",
     }
     logger.info("ingest_complete", **result)
+    typer.echo(json.dumps(result, sort_keys=True))
+    if not traces_ok:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def retrieve(
+    database: Annotated[
+        str | None,
+        typer.Option(help="SQLite path. Defaults to AI_NEWS_DATABASE_PATH."),
+    ] = None,
+    article: Annotated[
+        list[str] | None,
+        typer.Option(help="Article ID to retrieve. Repeat for more. Default: all."),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option(help="Maximum articles to retrieve."),
+    ] = 50,
+    timeout: Annotated[
+        float,
+        typer.Option(help="Per-article timeout in seconds."),
+    ] = 15.0,
+    max_bytes: Annotated[
+        int,
+        typer.Option(help="Maximum article body in bytes before aborting."),
+    ] = ARTICLE_MAX_BYTES,
+) -> None:
+    """Retrieve full text for stored articles with polite rate limits."""
+
+    settings = Settings()
+    configure_logging(
+        level=settings.ai_news_log_level,
+        output_format=settings.ai_news_log_format,
+    )
+    logger = structlog.get_logger(__name__)
+    database_path = database or str(settings.ai_news_database_path)
+    metadata = TraceMetadata(
+        digest_run_id="manual-retrieval",
+        component="retrieval",
+        environment=settings.ai_news_environment,
+    )
+
+    with tracing_scope(settings, metadata) as trace_client:
+        with SQLiteStore(database_path) as store:
+            store.migrate()
+            if article:
+                selected = [
+                    record
+                    for article_id in article
+                    if (record := store.get(Article, article_id)) is not None
+                ]
+            else:
+                selected = list(store.iter_records(Article))
+            summary = retrieve_articles(
+                tuple(selected[:limit]),
+                store,
+                timeout=timeout,
+                max_bytes=max_bytes,
+            )
+        traces_ok = flush_traces(trace_client)
+
+    result = {
+        "attempted": summary.attempted,
+        "retrieved": summary.retrieved,
+        "cached": summary.cached,
+        "insufficient": summary.insufficient,
+        "failed": summary.failed,
+        "database": database_path,
+        "tracing": "enabled" if settings.langsmith_tracing else "disabled",
+    }
+    logger.info("retrieve_complete", **result)
     typer.echo(json.dumps(result, sort_keys=True))
     if not traces_ok:
         raise typer.Exit(code=1)

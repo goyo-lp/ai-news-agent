@@ -72,3 +72,48 @@ def test_ingest_command_runs_offline_for_adapter_sources(tmp_path: Path) -> None
             "SELECT payload_json FROM records WHERE record_type = 'run'"
         ).fetchone()
         assert run_row is not None
+
+
+def test_retrieve_command_fetches_stored_articles(tmp_path: Path, monkeypatch) -> None:
+    from datetime import UTC, datetime
+
+    import ai_news_agent.extraction as extraction
+    from ai_news_agent.extraction import FetchedPage
+    from ai_news_agent.schemas import Article
+    from ai_news_agent.storage import SQLiteStore
+
+    now = datetime(2026, 9, 8, 12, 0, tzinfo=UTC)
+    database = tmp_path / "retrieve.db"
+    with SQLiteStore(database) as store:
+        store.migrate()
+        store.save(
+            Article(
+                id="article-cli",
+                source_id="source-01",
+                url="https://example.com/ai/cli",
+                canonical_url="https://example.com/ai/cli",
+                title="CLI story",
+                published_at=now,
+                first_seen_at=now,
+            )
+        )
+    html = (Path(__file__).parent / "fixtures" / "articles" / "valid.html").read_text(
+        encoding="utf-8"
+    )
+
+    def _page(url, *, timeout, max_bytes):
+        return FetchedPage(url=url, body=html.encode("utf-8"))
+
+    monkeypatch.setattr(extraction, "fetch_article_html", _page)
+
+    result = runner.invoke(app, ["retrieve", "--database", str(database)])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["attempted"] == 1
+    assert payload["retrieved"] == 1
+    with closing(sqlite3.connect(database)) as connection:
+        row = connection.execute(
+            "SELECT payload_json FROM records WHERE record_type = 'article_text'"
+        ).fetchone()
+        assert row is not None
