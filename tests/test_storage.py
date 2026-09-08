@@ -11,7 +11,11 @@ from ai_news_agent.storage import SQLiteStore
 
 def test_migrations_are_idempotent(tmp_path: Path) -> None:
     with SQLiteStore(tmp_path / "records.db") as store:
-        assert store.migrate() == ("0001_records.sql", "0002_feed_state.sql")
+        assert store.migrate() == (
+            "0001_records.sql",
+            "0002_feed_state.sql",
+            "0003_screening_cache.sql",
+        )
         assert store.migrate() == ()
         names = store.connection.execute(
             "SELECT name FROM schema_migrations"
@@ -20,6 +24,7 @@ def test_migrations_are_idempotent(tmp_path: Path) -> None:
     assert [row["name"] for row in names] == [
         "0001_records.sql",
         "0002_feed_state.sql",
+        "0003_screening_cache.sql",
     ]
 
 

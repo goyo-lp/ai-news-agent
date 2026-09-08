@@ -157,3 +157,75 @@ def test_cluster_command_groups_stored_articles(tmp_path: Path) -> None:
             "SELECT COUNT(*) FROM records WHERE record_type = 'story_cluster'"
         ).fetchone()[0]
         assert count == 2
+
+
+def test_screen_command_shortlists_with_injected_judge(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from datetime import UTC, datetime
+
+    import ai_news_agent.cli as cli
+    import ai_news_agent.screening as screening
+    from ai_news_agent.extraction import RetrievalSummary
+    from ai_news_agent.schemas import Article, StoryCluster
+    from ai_news_agent.screening import RelevanceVerdict
+    from ai_news_agent.storage import SQLiteStore
+
+    now = datetime(2026, 9, 8, 12, 0, tzinfo=UTC)
+    database = tmp_path / "screen.db"
+
+    def _article(article_id: str, title: str) -> Article:
+        url = f"https://example.com/ai/{article_id}"
+        return Article(
+            id=article_id,
+            source_id="source-01",
+            url=url,
+            canonical_url=url,
+            title=title,
+            published_at=now,
+            first_seen_at=now,
+        )
+
+    with SQLiteStore(database) as store:
+        store.migrate()
+        store.save(_article("a1", "Model release"))
+        store.save(_article("a2", "Gadget cases"))
+        for cluster_id, article_id in (("c1", "a1"), ("c2", "a2")):
+            store.save(
+                StoryCluster(
+                    id=cluster_id,
+                    article_ids=(article_id,),
+                    representative_article_id=article_id,
+                    rationale="seed",
+                    created_at=now,
+                )
+            )
+
+    class _Judge:
+        @property
+        def identity(self) -> str:
+            return "cli-fake"
+
+        def judge(self, title: str, excerpt: str, source_name: str):
+            if "Gadget" in title:
+                return RelevanceVerdict(
+                    relevant=False, borderline=False, reason="Not AI."
+                )
+            return RelevanceVerdict(
+                relevant=True, borderline=False, reason="Model release."
+            )
+
+    monkeypatch.setattr(cli, "build_judge", lambda settings, timeout=30.0: _Judge())
+    monkeypatch.setattr(
+        screening,
+        "retrieve_articles",
+        lambda *args, **kwargs: RetrievalSummary(),
+    )
+
+    result = runner.invoke(app, ["screen", "--database", str(database)])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["attempted"] == 2
+    assert payload["shortlisted"] == 1
+    assert payload["rejected"] == 1
