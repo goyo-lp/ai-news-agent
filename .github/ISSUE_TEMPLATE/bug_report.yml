@@ -1,0 +1,26 @@
+name: Bug report
+description: Report a reproducible problem
+title: "fix: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Actual vs expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Repro steps
+      description: Minimal steps or commands to reproduce
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: e.g. Python 3.12, langchain version, OS
+    validations:
+      required: false

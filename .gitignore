@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+*.log
+
+# LangChain / LLM artifacts
+.langchain/
+*.sqlite3
+chroma/
+faiss_index/
+.cache/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml

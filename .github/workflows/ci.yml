@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Sanity check (no secrets, valid repo)
+        run: |
+          python --version
+          git ls-files | head -n 20
+          # Fail if a .env file was accidentally committed
+          if git ls-files | grep -q '^\.env$'; then
+            echo ".env file committed — remove it" >&2
+            exit 1
+          fi
