@@ -8,6 +8,13 @@ Open-source LangChain AI agent for AI news.
 
 Agent implementation will land under `src/` via pull requests. See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow.
 
+## Editorial contract
+
+The initial [editorial policy](docs/editorial-policy.md) defines the audience,
+quality bar, evidence rules, scoring rubric, summary format, and failure
+behavior. The companion [source registry contract](docs/source-registry.md)
+records the proposed 50-source input that ingestion must validate before use.
+
 ## Workflow
 
 - Default branch: `main` (protected)
