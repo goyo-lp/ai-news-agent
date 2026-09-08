@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Fixture AI News</title>
+    <link>https://example.com/ai/</link>
+    <item>
+      <title>Repeated story appears twice</title>
+      <link>https://example.com/ai/repeated</link>
+      <guid>feed-entry-repeated-1</guid>
+      <pubDate>Sun, 07 Sep 2026 11:00:00 GMT</pubDate>
+      <description>Syndicated copies share one canonical URL.</description>
+    </item>
+    <item>
+      <title>Repeated story appears twice</title>
+      <link>https://example.com/ai/repeated?utm_campaign=x</link>
+      <guid>feed-entry-repeated-2</guid>
+      <pubDate>Sun, 07 Sep 2026 11:05:00 GMT</pubDate>
+      <description>Syndicated copies share one canonical URL.</description>
+    </item>
+  </channel>
+</rss>

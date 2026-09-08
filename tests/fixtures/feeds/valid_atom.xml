@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Fixture AI News</title>
+  <link href="https://example.com/ai/"/>
+  <entry>
+    <title>Fixture Lab ships agent toolkit</title>
+    <link href="https://example.com/ai/agent-toolkit?fbclid=abc123"/>
+    <id>feed-entry-toolkit</id>
+    <published>2026-09-07T09:00:00Z</published>
+    <updated>2026-09-07T09:30:00Z</updated>
+    <author><name>Toolkit Author</name></author>
+    <summary>An agent toolkit with inspectable tool calls.</summary>
+  </entry>
+  <entry>
+    <title>Fixture Lab discloses incident impact</title>
+    <link href="https://example.com/ai/incident"/>
+    <id>feed-entry-incident</id>
+    <published>Sun, 07 Sep 2026 08:00:00 GMT</published>
+    <summary>An incident report with measured impact.</summary>
+  </entry>
+</feed>

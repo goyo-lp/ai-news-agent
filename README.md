@@ -15,7 +15,8 @@ uv run ai-news-agent fixture
 
 The fixture command exercises the schemas and SQLite storage without network
 access, API keys, or tracing. See the [runtime guide](docs/runtime.md) for
-configuration, verification, and the opt-in LangSmith smoke test. Agent behavior
+configuration, verification, and the opt-in LangSmith smoke test. Feed
+collection is documented in the [ingestion guide](docs/ingestion.md). Agent behavior
 will land under `src/` through the remaining planned pull requests.
 
 ## Editorial contract

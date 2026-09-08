@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Fixture AI News</title>
+    <link>https://example.com/ai/</link>
+    <item>
+      <title>Undated release still parses</title>
+      <link>https://example.com/ai/undated</link>
+      <guid>feed-entry-undated</guid>
+      <description>A release without a publication date falls back to first-seen.</description>
+    </item>
+    <item>
+      <title>Quarantined entry without a link</title>
+      <guid>feed-entry-no-link</guid>
+      <pubDate>Sun, 07 Sep 2026 11:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <link>https://example.com/ai/no-title</link>
+      <guid>feed-entry-no-title</guid>
+      <pubDate>Sun, 07 Sep 2026 11:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>
