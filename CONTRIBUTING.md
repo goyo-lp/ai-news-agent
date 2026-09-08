@@ -23,7 +23,7 @@ Keep branches focused and rebased on latest `main` before opening a PR.
 1. Fork or branch, push your branch.
 2. Open a PR against `main` using the PR template.
 3. Requirements to merge (enforced on `main`):
-   - 1 approving review
+   - No required approvals (solo maintainer may self-merge; reviews welcome but not blocking)
    - Green `ci` status check
    - All conversations resolved
    - Up-to-date with `main` (strict status checks)
