@@ -11,10 +11,15 @@ venv/
 .env.*
 !.env.example
 *.log
+.local/
+.ruff_cache/
 
 # LangChain / LLM artifacts
 .langchain/
 *.sqlite3
+*.db
+*.db-shm
+*.db-wal
 chroma/
 faiss_index/
 .cache/

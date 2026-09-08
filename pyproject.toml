@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-news-agent"
+version = "0.1.0"
+description = "Evidence-backed daily AI news agent"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [{ name = "Goyo Lozano" }]
+dependencies = [
+  "langchain>=1.0,<2",
+  "langchain-core>=1.0,<2",
+  "langgraph>=1.0,<2",
+  "langsmith>=0.3,<1",
+  "pydantic>=2.11,<3",
+  "pydantic-settings>=2.10,<3",
+  "structlog>=25,<26",
+  "typer>=0.16,<1",
+]
+
+[project.scripts]
+ai-news-agent = "ai_news_agent.cli:app"
+
+[dependency-groups]
+dev = [
+  "pytest>=8,<9",
+  "pytest-cov>=6,<8",
+  "ruff>=0.12,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_news_agent"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers --cov=ai_news_agent --cov-report=term-missing --cov-fail-under=90"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["ai_news_agent"]
+
+[tool.coverage.report]
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "if __name__ == .__main__.:",
+]
+
+[tool.ruff]
+exclude = [".agents"]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "RUF", "SIM", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]

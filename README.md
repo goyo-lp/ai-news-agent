@@ -4,9 +4,19 @@ Open-source LangChain AI agent for AI news.
 
 > Early scaffolding — no agent code yet. This repo currently sets up the open-source foundation: branching, protections, and PR workflow.
 
-## Quickstart (coming soon)
+## Quickstart
 
-Agent implementation will land under `src/` via pull requests. See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow.
+The project requires Python 3.12+ and uses `uv` for reproducible environments:
+
+```bash
+uv sync --locked --all-groups
+uv run ai-news-agent fixture
+```
+
+The fixture command exercises the schemas and SQLite storage without network
+access, API keys, or tracing. See the [runtime guide](docs/runtime.md) for
+configuration, verification, and the opt-in LangSmith smoke test. Agent behavior
+will land under `src/` through the remaining planned pull requests.
 
 ## Editorial contract
 
