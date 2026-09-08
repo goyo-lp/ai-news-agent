@@ -29,8 +29,9 @@ from ai_news_agent.observability import (
     run_trace_smoke,
     tracing_scope,
 )
-from ai_news_agent.schemas import Article, StoryCluster
+from ai_news_agent.schemas import Article, Score, StoryCluster
 from ai_news_agent.screening import build_judge, screen_clusters
+from ai_news_agent.selection import render_draft, select_digest
 from ai_news_agent.sources import load_source_configs, load_sources_as_records
 from ai_news_agent.storage import SQLiteStore
 
@@ -431,6 +432,94 @@ def rank(
         "tracing": "enabled" if settings.langsmith_tracing else "disabled",
     }
     logger.info("rank_complete", **result)
+    typer.echo(json.dumps(result, sort_keys=True))
+    if not traces_ok:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def select(
+    database: Annotated[
+        str | None,
+        typer.Option(help="SQLite path. Defaults to AI_NEWS_DATABASE_PATH."),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option(help="Maximum clusters to consider."),
+    ] = 100,
+    digest_run_id: Annotated[
+        str,
+        typer.Option(help="Shared digest run ID recorded on traces."),
+    ] = "manual-selection",
+    max_selected: Annotated[
+        int,
+        typer.Option(help="Maximum stories in the digest."),
+    ] = 10,
+    max_reserve: Annotated[
+        int,
+        typer.Option(help="Maximum reserve candidates."),
+    ] = 5,
+    draft_path: Annotated[
+        str | None,
+        typer.Option(help="Write a markdown draft preview to this path."),
+    ] = None,
+) -> None:
+    """Select the top scored clusters with reserves and a review draft."""
+
+    settings = Settings()
+    configure_logging(
+        level=settings.ai_news_log_level,
+        output_format=settings.ai_news_log_format,
+    )
+    logger = structlog.get_logger(__name__)
+    database_path = database or str(settings.ai_news_database_path)
+    metadata = TraceMetadata(
+        digest_run_id=digest_run_id,
+        component="selection",
+        environment=settings.ai_news_environment,
+    )
+
+    with tracing_scope(settings, metadata) as trace_client:
+        with SQLiteStore(database_path) as store:
+            store.migrate()
+            clusters = list(store.iter_records(StoryCluster))[:limit]
+            articles = {article.id: article for article in store.iter_records(Article)}
+            scores = {
+                score.story_cluster_id: score for score in store.iter_records(Score)
+            }
+            summary = select_digest(
+                tuple(clusters),
+                scores,
+                articles,
+                store,
+                max_selected=max_selected,
+                max_reserve=max_reserve,
+            )
+            draft = render_draft(
+                summary,
+                {cluster.id: cluster for cluster in clusters},
+                articles,
+                scores,
+                store,
+            )
+            if draft_path:
+                with open(draft_path, "w", encoding="utf-8") as handle:
+                    handle.write(draft)
+        traces_ok = flush_traces(trace_client)
+
+    result = {
+        "digest_run_id": digest_run_id,
+        "attempted": summary.attempted,
+        "eligible": summary.eligible,
+        "selected": summary.selected,
+        "reserve": summary.reserve,
+        "shortfall": summary.shortfall,
+        "selected_ids": list(summary.selected_ids),
+        "reserve_ids": list(summary.reserve_ids),
+        "database": database_path,
+        "tracing": "enabled" if settings.langsmith_tracing else "disabled",
+    }
+    logger.info("select_complete", **result)
     typer.echo(json.dumps(result, sort_keys=True))
     if not traces_ok:
         raise typer.Exit(code=1)
