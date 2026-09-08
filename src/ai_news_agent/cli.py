@@ -9,12 +9,19 @@ import typer
 
 from ai_news_agent.config import Settings
 from ai_news_agent.fixtures import load_sample_records
+from ai_news_agent.ingestion import (
+    DEFAULT_MAX_BYTES,
+    DEFAULT_MAX_WORKERS,
+    ingest_sources,
+)
 from ai_news_agent.logging import configure_logging
 from ai_news_agent.observability import (
     TraceMetadata,
+    flush_traces,
     run_trace_smoke,
     tracing_scope,
 )
+from ai_news_agent.sources import load_source_configs, load_sources_as_records
 from ai_news_agent.storage import SQLiteStore
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
@@ -60,6 +67,82 @@ def fixture(
     }
     logger.info("fixture_complete", **result)
     typer.echo(json.dumps(result, sort_keys=True))
+
+
+@app.command()
+def ingest(
+    config: Annotated[
+        str,
+        typer.Option(help="Path to config/sources.yaml."),
+    ] = "config/sources.yaml",
+    database: Annotated[
+        str | None,
+        typer.Option(help="SQLite path. Defaults to AI_NEWS_DATABASE_PATH."),
+    ] = None,
+    digest_run_id: Annotated[
+        str,
+        typer.Option(help="Shared digest run ID recorded on the Run and traces."),
+    ] = "manual-ingest",
+    max_workers: Annotated[
+        int,
+        typer.Option(help="Bounded concurrent feed fetches."),
+    ] = DEFAULT_MAX_WORKERS,
+    timeout: Annotated[
+        float,
+        typer.Option(help="Per-feed timeout in seconds."),
+    ] = 15.0,
+    max_bytes: Annotated[
+        int,
+        typer.Option(help="Maximum feed body in bytes before aborting."),
+    ] = DEFAULT_MAX_BYTES,
+) -> None:
+    """Fetch configured feeds idempotently and record coverage."""
+
+    settings = Settings()
+    configure_logging(
+        level=settings.ai_news_log_level,
+        output_format=settings.ai_news_log_format,
+    )
+    logger = structlog.get_logger(__name__)
+    database_path = database or str(settings.ai_news_database_path)
+    source_configs = load_source_configs(config)
+    metadata = TraceMetadata(
+        digest_run_id=digest_run_id,
+        component="ingestion",
+        environment=settings.ai_news_environment,
+    )
+
+    with tracing_scope(settings, metadata) as trace_client:
+        with SQLiteStore(database_path) as store:
+            store.migrate()
+            for record in load_sources_as_records(config):
+                if store.get(type(record), record.id) is None:
+                    store.save(record)
+            summary = ingest_sources(
+                source_configs,
+                store,
+                digest_run_id=digest_run_id,
+                max_workers=max_workers,
+                timeout=timeout,
+                max_bytes=max_bytes,
+            )
+        traces_ok = flush_traces(trace_client)
+
+    result = {
+        "digest_run_id": digest_run_id,
+        "attempted": summary.coverage.attempted,
+        "successful": summary.coverage.successful,
+        "unchanged": summary.coverage.unchanged,
+        "failed": summary.coverage.failed,
+        "unavailable": summary.coverage.unavailable,
+        "new_articles": summary.new_article_count,
+        "database": database_path,
+        "tracing": "enabled" if settings.langsmith_tracing else "disabled",
+    }
+    logger.info("ingest_complete", **result)
+    typer.echo(json.dumps(result, sort_keys=True))
+    if not traces_ok:
+        raise typer.Exit(code=1)
 
 
 @app.command("trace-smoke")

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Fixture AI News</title>
+    <link>https://example.com/ai/</link>
+    <description>Two recent AI stories.</description>
+    <item>
+      <title>Fixture Lab releases Model A</title>
+      <link>https://example.com/ai/model-a?utm_source=feed&amp;utm_medium=rss</link>
+      <guid>feed-entry-model-a</guid>
+      <pubDate>Sun, 07 Sep 2026 11:00:00 GMT</pubDate>
+      <author>Example Author</author>
+      <description><![CDATA[<p>Model A improves cost and capability with open weights.</p>]]></description>
+    </item>
+    <item>
+      <title>Fixture Lab publishes evaluation method</title>
+      <link>https://example.com/ai/eval-method</link>
+      <guid>feed-entry-eval</guid>
+      <pubDate>2026-09-07T10:00:00Z</pubDate>
+      <description>An evaluation method with reproducible measurements.</description>
+    </item>
+  </channel>
+</rss>

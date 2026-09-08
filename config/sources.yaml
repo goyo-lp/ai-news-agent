@@ -1,0 +1,915 @@
+# 50-source ingestion roster (PR03 input, not production coverage).
+# Research snapshot: plan-research-2026-09-07. Every route starts as a
+# candidate; PR03 ingestion must verify reachability, freshness, canonical
+# links, dates, and one readable article before any route becomes active.
+# See docs/source-registry.md for the configuration contract.
+- id: source-01
+  name: OpenAI
+  publisher_family: openai
+  category: labs-platforms
+  tier: core
+  homepage_url: https://openai.com/news/
+  route:
+    type: rss
+    url: https://openai.com/news/rss.xml
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: ai-news
+  editorial_notes:
+    - Vendor claims need attribution; filter routine corporate announcements.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-02
+  name: Anthropic
+  publisher_family: anthropic
+  category: labs-platforms
+  tier: core
+  homepage_url: https://www.anthropic.com/news
+  route:
+    type: official_page_adapter
+    url: https://www.anthropic.com/news
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: official-news
+  editorial_notes:
+    - Use an official-page adapter if no native feed is confirmed.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-03
+  name: Google DeepMind
+  publisher_family: google
+  category: labs-platforms
+  tier: core
+  homepage_url: https://deepmind.google/blog/
+  route:
+    type: rss
+    url: https://deepmind.google/blog/rss.xml
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: ai-news
+  editorial_notes:
+    - Group overlapping Google announcements into one event.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-04
+  name: Meta AI
+  publisher_family: meta
+  category: labs-platforms
+  tier: core
+  homepage_url: https://ai.meta.com/blog/
+  route:
+    type: official_page_adapter
+    url: https://ai.meta.com/blog/
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: official-blog
+  editorial_notes:
+    - Page access may require an adapter; do not treat access blocks as no news.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-05
+  name: Mistral AI
+  publisher_family: mistral
+  category: labs-platforms
+  tier: core
+  homepage_url: https://mistral.ai/news
+  route:
+    type: rss
+    url: https://mistral.ai/news/rss
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: ai-news
+  editorial_notes:
+    - Retain European coverage; distinguish releases from marketing.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-06
+  name: Qwen
+  publisher_family: qwen
+  category: labs-platforms
+  tier: core
+  homepage_url: https://qwen.ai/blog
+  route:
+    type: official_page_adapter
+    url: https://qwen.ai/blog
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: official-blog
+  editorial_notes:
+    - Validate model availability and benchmark methodology.
+    - Use the current Qwen site; tested legacy feed paths returned 404.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-07
+  name: DeepSeek
+  publisher_family: deepseek
+  category: labs-platforms
+  tier: core
+  homepage_url: https://api-docs.deepseek.com/updates
+  route:
+    type: official_page_adapter
+    url: https://api-docs.deepseek.com/updates
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: release-notes
+  editorial_notes:
+    - Technical release notes are primary evidence, not independent validation.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-08
+  name: Cohere
+  publisher_family: cohere
+  category: labs-platforms
+  tier: breadth
+  homepage_url: https://cohere.com/blog
+  route:
+    type: official_page_adapter
+    url: https://cohere.com/blog
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: official-blog
+  editorial_notes:
+    - Filter customer promotion and require a concrete technical change.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-09
+  name: Allen Institute for AI (Ai2)
+  publisher_family: ai2
+  category: labs-platforms
+  tier: core
+  homepage_url: https://allenai.org/blog
+  route:
+    type: rss
+    url: https://allenai.org/rss.xml
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: ai-news
+  editorial_notes:
+    - Research results need limitations and release links.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-10
+  name: Hugging Face
+  publisher_family: huggingface
+  category: labs-platforms
+  tier: core
+  homepage_url: https://huggingface.co/blog
+  route:
+    type: rss
+    url: https://huggingface.co/blog/feed.xml
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: ecosystem
+  editorial_notes:
+    - Separate official posts from community contributions; filter tutorials.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-11
+  name: NVIDIA Developer
+  publisher_family: nvidia
+  category: labs-platforms
+  tier: core
+  homepage_url: https://developer.nvidia.com/blog/
+  route:
+    type: atom
+    url: https://developer.nvidia.com/blog/feed/
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: broad-developer
+  editorial_notes:
+    - Broad developer feed; filter gaming and unrelated graphics content.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-12
+  name: Microsoft Research
+  publisher_family: microsoft
+  category: labs-platforms
+  tier: breadth
+  homepage_url: https://www.microsoft.com/en-us/research/blog/
+  route:
+    type: rss
+    url: https://www.microsoft.com/en-us/research/feed/
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: broad-research
+  editorial_notes:
+    - Broad research feed; distinguish experiments from shipping products.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-13
+  name: AWS Machine Learning
+  publisher_family: aws
+  category: labs-platforms
+  tier: breadth
+  homepage_url: https://aws.amazon.com/blogs/machine-learning/
+  route:
+    type: rss
+    url: https://aws.amazon.com/blogs/machine-learning/feed/
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: broad-vendor-tutorials
+  editorial_notes:
+    - High promotional and tutorial volume; prioritize material releases.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-14
+  name: Google Research
+  publisher_family: google
+  category: labs-platforms
+  tier: breadth
+  homepage_url: https://research.google/blog/
+  route:
+    type: rss
+    url: https://research.google/blog/rss/
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: broad-research
+  editorial_notes:
+    - Same corporate family as DeepMind; apply a family-level diversity preference.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-15
+  name: TechCrunch AI
+  publisher_family: techcrunch
+  category: independent-reporting
+  tier: core
+  homepage_url: https://techcrunch.com/category/artificial-intelligence/
+  route:
+    type: rss
+    url: https://techcrunch.com/category/artificial-intelligence/feed/
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: ai-news
+  editorial_notes:
+    - Funding alone is not impact; prioritize consequential developments.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-16
+  name: The Verge AI
+  publisher_family: verge
+  category: independent-reporting
+  tier: breadth
+  homepage_url: https://www.theverge.com/ai-artificial-intelligence
+  route:
+    type: atom
+    url: https://www.theverge.com/rss/ai-artificial-intelligence/index.xml
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: ai-news
+  editorial_notes:
+    - Some articles may require a subscription.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-17
+  name: Ars Technica
+  publisher_family: ars-technica
+  category: independent-reporting
+  tier: core
+  homepage_url: https://arstechnica.com/ai/
+  route:
+    type: rss
+    url: https://arstechnica.com/ai/feed/
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: ai-news
+  editorial_notes:
+    - AI-specific feed; distinguish reporting, opinion, and hands-on tests.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-18
+  name: WIRED AI
+  publisher_family: wired
+  category: independent-reporting
+  tier: breadth
+  homepage_url: https://www.wired.com/tag/artificial-intelligence/
+  route:
+    type: rss
+    url: https://www.wired.com/feed/tag/ai/latest/rss
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: ai-news
+  editorial_notes:
+    - Paywalled articles require accessible evidence or exclusion.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-19
+  name: MIT Technology Review
+  publisher_family: mit-technology-review
+  category: independent-reporting
+  tier: core
+  homepage_url: https://www.technologyreview.com/topic/artificial-intelligence/
+  route:
+    type: rss
+    url: https://www.technologyreview.com/feed/
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: broad-tech
+  editorial_notes:
+    - Broad feed and partial access; avoid summarizing unseen text.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-20
+  name: VentureBeat AI
+  publisher_family: venturebeat
+  category: independent-reporting
+  tier: breadth
+  homepage_url: https://venturebeat.com/category/ai/
+  route:
+    type: rss
+    url: https://venturebeat.com/category/ai/feed/
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: ai-news
+  editorial_notes:
+    - Separate reporting from sponsored and contributed material.
+    - "Recheck required: HTTP 429 observed; retry with backoff on the deployment host."
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-21
+  name: The Register AI
+  publisher_family: register
+  category: independent-reporting
+  tier: core
+  homepage_url: https://www.theregister.com/software/ai_ml/
+  route:
+    type: atom
+    url: https://www.theregister.com/software/ai_ml/headlines.atom
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: ai-news
+  editorial_notes:
+    - Distinguish reporting from opinion and satire.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-22
+  name: IEEE Spectrum
+  publisher_family: ieee
+  category: independent-reporting
+  tier: breadth
+  homepage_url: https://spectrum.ieee.org/artificial-intelligence
+  route:
+    type: rss
+    url: https://spectrum.ieee.org/feeds/topic/artificial-intelligence.rss
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: ai-news
+  editorial_notes:
+    - Require new developments rather than evergreen explainers.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-23
+  name: The Decoder
+  publisher_family: decoder
+  category: independent-reporting
+  tier: breadth
+  homepage_url: https://the-decoder.com/
+  route:
+    type: rss
+    url: https://the-decoder.com/feed/
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: ai-news
+  editorial_notes:
+    - Follow links to original evidence for major claims.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-24
+  name: 404 Media
+  publisher_family: 404-media
+  category: independent-reporting
+  tier: breadth
+  homepage_url: https://www.404media.co/
+  route:
+    type: rss
+    url: https://www.404media.co/rss/
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: broad-tech
+  editorial_notes:
+    - Broad feed; respect member-only article limits.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-25
+  name: Rest of World
+  publisher_family: rest-of-world
+  category: independent-reporting
+  tier: breadth
+  homepage_url: https://restofworld.org/
+  route:
+    type: rss
+    url: https://restofworld.org/feed/
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: broad-tech
+  editorial_notes:
+    - Broad technology feed; retain geographic diversity.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-26
+  name: TechNode
+  publisher_family: technode
+  category: independent-reporting
+  tier: breadth
+  homepage_url: https://technode.com/
+  route:
+    type: rss
+    url: https://technode.com/feed/
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: broad-tech-large
+  editorial_notes:
+    - Broad feed; distinguish reporting from sponsored content.
+    - Large response observed (~11.6 MB, 2000 entries); use bounded streaming.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-27
+  name: arXiv AI / ML / NLP / vision
+  publisher_family: arxiv
+  category: research-academia
+  tier: core
+  homepage_url: https://arxiv.org/
+  route:
+    type: rss
+    url: https://rss.arxiv.org/rss/cs.AI+cs.LG+cs.CL+cs.CV
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: broad-preprints
+  editorial_notes:
+    - Preprints are not peer-reviewed; cap volume and require significance evidence.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-28
+  name: Berkeley AI Research (BAIR)
+  publisher_family: berkeley
+  category: research-academia
+  tier: breadth
+  homepage_url: https://bair.berkeley.edu/blog/
+  route:
+    type: rss
+    url: https://bair.berkeley.edu/blog/feed.xml
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: ai-news
+  editorial_notes:
+    - Lab-authored research is not independent replication.
+    - "Recheck required: feed and page requests timed out; verify reachability and recency."
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-29
+  name: Stanford HAI
+  publisher_family: stanford-hai
+  category: research-academia
+  tier: breadth
+  homepage_url: https://hai.stanford.edu/news
+  route:
+    type: official_page_adapter
+    url: https://hai.stanford.edu/news
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: official-news
+  editorial_notes:
+    - Use a page adapter if necessary; distinguish analysis from new research.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-30
+  name: MIT News AI
+  publisher_family: mit-news
+  category: research-academia
+  tier: breadth
+  homepage_url: https://news.mit.edu/topic/artificial-intelligence2
+  route:
+    type: rss
+    url: https://news.mit.edu/rss/topic/artificial-intelligence2
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: ai-news
+  editorial_notes:
+    - Institutional reporting; inspect the underlying paper.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-31
+  name: METR
+  publisher_family: metr
+  category: research-academia
+  tier: core
+  homepage_url: https://metr.org/blog/
+  route:
+    type: rss
+    url: https://metr.org/feed.xml
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: ai-news-large
+  editorial_notes:
+    - Report the tested setting and uncertainty; do not generalize benchmark results.
+    - Large response observed (~8.9 MB); use bounded streaming and conditional fetches.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-32
+  name: Nature Machine Intelligence
+  publisher_family: nature
+  category: research-academia
+  tier: breadth
+  homepage_url: https://www.nature.com/natmachintell/
+  route:
+    type: rss
+    url: https://www.nature.com/natmachintell.rss
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: ai-news
+  editorial_notes:
+    - Abstract-only access cannot support a full-paper summary.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-33
+  name: ScienceDaily AI
+  publisher_family: sciencedaily
+  category: research-academia
+  tier: breadth
+  homepage_url: https://www.sciencedaily.com/news/computers_math/artificial_intelligence/
+  route:
+    type: rss
+    url: https://www.sciencedaily.com/rss/computers_math/artificial_intelligence.xml
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: ai-news
+  editorial_notes:
+    - Often institution-supplied releases; never count as independent corroboration.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-34
+  name: Epoch AI
+  publisher_family: epoch
+  category: research-academia
+  tier: core
+  homepage_url: https://epoch.ai/latest
+  route:
+    type: rss
+    url: https://epochai.substack.com/feed
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: newsletter-partial
+  editorial_notes:
+    - Separate measured trends from projections and assumptions.
+    - Newsletter only; monitor the official latest page for other publications.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-35
+  name: Simon Willison
+  publisher_family: simon-willison
+  category: builders-analysis
+  tier: core
+  homepage_url: https://simonwillison.net/
+  route:
+    type: atom
+    url: https://simonwillison.net/atom/everything/
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: broad-personal
+  editorial_notes:
+    - Opinion and experiments need attribution; filter unrelated posts.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-36
+  name: Artificial Analysis
+  publisher_family: artificial-analysis
+  category: builders-analysis
+  tier: core
+  homepage_url: https://artificialanalysis.ai/articles
+  route:
+    type: official_page_adapter
+    url: https://artificialanalysis.ai/articles
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: official-index
+  editorial_notes:
+    - Record benchmark version and methodology; one index does not measure every use case.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-37
+  name: Ahead of AI - Sebastian Raschka
+  publisher_family: sebastian-raschka
+  category: builders-analysis
+  tier: breadth
+  homepage_url: https://magazine.sebastianraschka.com/
+  route:
+    type: rss
+    url: https://magazine.sebastianraschka.com/feed
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: newsletter
+  editorial_notes:
+    - Newsletter cadence; partial paid posts require accessible evidence.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-38
+  name: Grok / xAI (SpaceXAI)
+  publisher_family: xai
+  category: labs-platforms
+  tier: breadth
+  homepage_url: https://x.ai/news
+  route:
+    type: official_page_adapter
+    url: https://x.ai/news
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: official-news
+  editorial_notes:
+    - Vendor source; corroborate performance claims and distinguish release from preview.
+    - Direct access was inconsistent (200 then 403) in research.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-39
+  name: Interconnects - Nathan Lambert
+  publisher_family: interconnects
+  category: builders-analysis
+  tier: breadth
+  homepage_url: https://www.interconnects.ai/
+  route:
+    type: rss
+    url: https://www.interconnects.ai/feed
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: newsletter
+  editorial_notes:
+    - Label opinion and author affiliations; do not treat as independent replication.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-40
+  name: Latent Space
+  publisher_family: latent-space
+  category: builders-analysis
+  tier: breadth
+  homepage_url: https://www.latent.space/
+  route:
+    type: rss
+    url: https://www.latent.space/feed
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: ai-engineering
+  editorial_notes:
+    - Prefer written posts; podcasts need accessible transcripts.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-41
+  name: Import AI - Jack Clark
+  publisher_family: import-ai
+  category: builders-analysis
+  tier: breadth
+  homepage_url: https://importai.substack.com/
+  route:
+    type: rss
+    url: https://importai.substack.com/feed
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: newsletter
+  editorial_notes:
+    - Weekly analysis; attribute views and disclose industry affiliation.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-42
+  name: LangChain Blog
+  publisher_family: langchain
+  category: builders-analysis
+  tier: breadth
+  homepage_url: https://www.langchain.com/blog
+  route:
+    type: rss
+    url: https://www.langchain.com/blog/rss.xml
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: vendor-blog
+  editorial_notes:
+    - Vendor source; prioritize changes useful to builders over promotional case studies.
+    - Some entries lack a title; quarantine malformed entries without rejecting the feed.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-43
+  name: LlamaIndex Blog
+  publisher_family: llamaindex
+  category: builders-analysis
+  tier: breadth
+  homepage_url: https://www.llamaindex.ai/blog
+  route:
+    type: official_page_adapter
+    url: https://www.llamaindex.ai/blog
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: vendor-blog
+  editorial_notes:
+    - Vendor source; verify release details and filter tutorials.
+    - Tested /blog/rss.xml and /rss.xml returned 404 in research.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-44
+  name: NIST AI
+  publisher_family: nist
+  category: policy-public-interest
+  tier: breadth
+  homepage_url: https://www.nist.gov/artificial-intelligence
+  route:
+    type: rss
+    url: https://www.nist.gov/news-events/news/rss.xml
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: broad-government
+  editorial_notes:
+    - Broad government feed; retain only AI-related changes.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-45
+  name: European Commission AI
+  publisher_family: european-commission
+  category: policy-public-interest
+  tier: breadth
+  homepage_url: https://digital-strategy.ec.europa.eu/en/policies/artificial-intelligence
+  route:
+    type: official_page_adapter
+    url: https://digital-strategy.ec.europa.eu/en/policies/artificial-intelligence
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: policy-hub
+  editorial_notes:
+    - Use official updates; distinguish proposals, adopted rules, and effective dates.
+    - Use the policy hub to discover dated news; do not treat a static hub edit as law.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-46
+  name: OECD.AI
+  publisher_family: oecd
+  category: policy-public-interest
+  tier: breadth
+  homepage_url: https://oecd.ai/en/wonk
+  route:
+    type: official_page_adapter
+    url: https://oecd.ai/en/wonk
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: policy-analysis
+  editorial_notes:
+    - Expert analysis is not itself a new binding rule.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-47
+  name: UK AI Security Institute
+  publisher_family: uk-aisi
+  category: policy-public-interest
+  tier: core
+  homepage_url: https://www.aisi.gov.uk/blog
+  route:
+    type: official_page_adapter
+    url: https://www.aisi.gov.uk/blog
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: official-research
+  editorial_notes:
+    - Track official research releases; label preliminary findings.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-48
+  name: Electronic Frontier Foundation
+  publisher_family: eff
+  category: policy-public-interest
+  tier: breadth
+  homepage_url: https://www.eff.org/issues/ai
+  route:
+    type: rss
+    url: https://www.eff.org/rss/updates.xml
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: advocacy
+  editorial_notes:
+    - Advocacy perspective; corroborate legal facts with original documents.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-49
+  name: AI Now Institute
+  publisher_family: ai-now
+  category: policy-public-interest
+  tier: breadth
+  homepage_url: https://ainowinstitute.org/
+  route:
+    type: rss
+    url: https://ainowinstitute.org/feed
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: advocacy-research
+  editorial_notes:
+    - Policy and advocacy analysis; distinguish recommendations from enacted policy.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
+- id: source-50
+  name: Georgetown CSET
+  publisher_family: cset
+  category: policy-public-interest
+  tier: breadth
+  homepage_url: https://cset.georgetown.edu/
+  route:
+    type: rss
+    url: https://cset.georgetown.edu/feed/
+    status: candidate
+  discovery_provenance: plan-research-2026-09-07
+  feed_scope: research-analysis
+  editorial_notes:
+    - Research and analysis cadence; avoid treating commentary as an official decision.
+  enabled: false
+  disabled_reason: pending-pr03-validation
+  last_checked_at: null
+  last_success_at: null
