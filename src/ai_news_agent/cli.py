@@ -9,6 +9,7 @@ import typer
 
 from ai_news_agent.clustering import cluster_articles
 from ai_news_agent.config import Settings
+from ai_news_agent.editorial import build_editorial_judge, rank_clusters
 from ai_news_agent.extraction import (
     DEFAULT_MAX_BYTES as ARTICLE_MAX_BYTES,
 )
@@ -344,6 +345,92 @@ def screen(
         "tracing": "enabled" if settings.langsmith_tracing else "disabled",
     }
     logger.info("screen_complete", **result)
+    typer.echo(json.dumps(result, sort_keys=True))
+    if not traces_ok:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def rank(
+    database: Annotated[
+        str | None,
+        typer.Option(help="SQLite path. Defaults to AI_NEWS_DATABASE_PATH."),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option(help="Maximum clusters to rank."),
+    ] = 100,
+    digest_run_id: Annotated[
+        str,
+        typer.Option(help="Shared digest run ID recorded on traces."),
+    ] = "manual-editorial",
+    max_tool_calls: Annotated[
+        int,
+        typer.Option(help="Total evidence tool-call budget."),
+    ] = 40,
+    max_iterations: Annotated[
+        int,
+        typer.Option(help="Total judge-call budget."),
+    ] = 20,
+    max_seconds: Annotated[
+        float,
+        typer.Option(help="Elapsed-time budget in seconds."),
+    ] = 120.0,
+    timeout: Annotated[
+        float,
+        typer.Option(help="Per-judge-call timeout in seconds."),
+    ] = 30.0,
+    published: Annotated[
+        list[str] | None,
+        typer.Option(help="Already-published article ID. Repeat for more."),
+    ] = None,
+) -> None:
+    """Investigate shortlisted clusters and rank them with scores."""
+
+    settings = Settings()
+    configure_logging(
+        level=settings.ai_news_log_level,
+        output_format=settings.ai_news_log_format,
+    )
+    logger = structlog.get_logger(__name__)
+    database_path = database or str(settings.ai_news_database_path)
+    metadata = TraceMetadata(
+        digest_run_id=digest_run_id,
+        component="editorial",
+        environment=settings.ai_news_environment,
+    )
+
+    with tracing_scope(settings, metadata) as trace_client:
+        with SQLiteStore(database_path) as store:
+            store.migrate()
+            clusters = list(store.iter_records(StoryCluster))[:limit]
+            articles = {article.id: article for article in store.iter_records(Article)}
+            summary = rank_clusters(
+                tuple(clusters),
+                articles,
+                store,
+                judge=build_editorial_judge(settings, timeout=timeout),
+                digest_run_id=digest_run_id,
+                published_article_ids=frozenset(published or ()),
+                max_tool_calls=max_tool_calls,
+                max_iterations=max_iterations,
+                max_seconds=max_seconds,
+            )
+        traces_ok = flush_traces(trace_client)
+
+    result = {
+        "digest_run_id": digest_run_id,
+        "attempted": summary.attempted,
+        "ranked": summary.ranked,
+        "incomplete": summary.incomplete,
+        "revisions": summary.revisions,
+        "ranking": list(summary.ranking),
+        "model": summary.model,
+        "termination_reason": summary.termination_reason,
+        "database": database_path,
+        "tracing": "enabled" if settings.langsmith_tracing else "disabled",
+    }
+    logger.info("rank_complete", **result)
     typer.echo(json.dumps(result, sort_keys=True))
     if not traces_ok:
         raise typer.Exit(code=1)
