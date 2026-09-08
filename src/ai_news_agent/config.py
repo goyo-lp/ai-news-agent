@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     ai_news_environment: str = "local"
 
     langsmith_tracing: bool = False
-    langsmith_project: str = "ai-news-agent-local"
+    langsmith_project: str = "ai-news-agent"
     langsmith_api_key: SecretStr | None = None
     langsmith_workspace_id: str | None = None
     langsmith_endpoint: str | None = None

@@ -63,7 +63,7 @@ Set these values only for an opt-in live smoke run:
 ```bash
 export LANGSMITH_TRACING=true
 export LANGSMITH_API_KEY=your-key
-export LANGSMITH_PROJECT=ai-news-agent-smoke
+export LANGSMITH_PROJECT=ai-news-agent
 uv run ai-news-agent trace-smoke --digest-run-id manual-smoke-001
 ```
 
