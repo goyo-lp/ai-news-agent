@@ -7,6 +7,7 @@ from typing import Annotated
 import structlog
 import typer
 
+from ai_news_agent.clustering import cluster_articles
 from ai_news_agent.config import Settings
 from ai_news_agent.extraction import (
     DEFAULT_MAX_BYTES as ARTICLE_MAX_BYTES,
@@ -219,6 +220,61 @@ def retrieve(
         "tracing": "enabled" if settings.langsmith_tracing else "disabled",
     }
     logger.info("retrieve_complete", **result)
+    typer.echo(json.dumps(result, sort_keys=True))
+    if not traces_ok:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def cluster(
+    database: Annotated[
+        str | None,
+        typer.Option(help="SQLite path. Defaults to AI_NEWS_DATABASE_PATH."),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option(help="Maximum articles to cluster."),
+    ] = 200,
+    published: Annotated[
+        list[str] | None,
+        typer.Option(help="Already-published article ID. Repeat for more."),
+    ] = None,
+) -> None:
+    """Group stored articles into distinct story clusters."""
+
+    settings = Settings()
+    configure_logging(
+        level=settings.ai_news_log_level,
+        output_format=settings.ai_news_log_format,
+    )
+    logger = structlog.get_logger(__name__)
+    database_path = database or str(settings.ai_news_database_path)
+    metadata = TraceMetadata(
+        digest_run_id="manual-clustering",
+        component="clustering",
+        environment=settings.ai_news_environment,
+    )
+
+    with tracing_scope(settings, metadata) as trace_client:
+        with SQLiteStore(database_path) as store:
+            store.migrate()
+            articles = list(store.iter_records(Article))[:limit]
+            summary = cluster_articles(
+                tuple(articles),
+                store=store,
+                published_article_ids=frozenset(published or ()),
+            )
+        traces_ok = flush_traces(trace_client)
+
+    result = {
+        "attempted": summary.attempted,
+        "clusters": summary.clusters,
+        "duplicates_collapsed": summary.duplicates_collapsed,
+        "recycled": summary.recycled,
+        "database": database_path,
+        "tracing": "enabled" if settings.langsmith_tracing else "disabled",
+    }
+    logger.info("cluster_complete", **result)
     typer.echo(json.dumps(result, sort_keys=True))
     if not traces_ok:
         raise typer.Exit(code=1)
