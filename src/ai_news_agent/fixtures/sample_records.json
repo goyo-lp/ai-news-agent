@@ -1,0 +1,134 @@
+{
+  "records": [
+    {
+      "type": "source",
+      "record": {
+        "id": "source-fixture",
+        "name": "Fixture AI Lab",
+        "publisher_family": "fixture-lab",
+        "category": "labs-platforms",
+        "tier": "core",
+        "homepage_url": "https://example.com/ai",
+        "route_type": "rss",
+        "route_url": "https://example.com/ai/feed.xml",
+        "feed_scope": "ai-news",
+        "editorial_notes": ["Fixture data only."],
+        "enabled": true,
+        "disabled_reason": null,
+        "last_checked_at": "2026-09-07T12:00:00Z",
+        "last_success_at": "2026-09-07T12:00:00Z"
+      }
+    },
+    {
+      "type": "article",
+      "record": {
+        "id": "article-fixture",
+        "source_id": "source-fixture",
+        "url": "https://example.com/ai/model-a",
+        "canonical_url": "https://example.com/ai/model-a",
+        "title": "Fixture Lab releases Model A",
+        "authors": ["Example Author"],
+        "published_at": "2026-09-07T11:00:00Z",
+        "updated_at": null,
+        "first_seen_at": "2026-09-07T12:00:00Z",
+        "raw_feed_ref": "feed-entry-fixture"
+      }
+    },
+    {
+      "type": "article_text",
+      "record": {
+        "id": "article-text-fixture",
+        "article_id": "article-fixture",
+        "text": "Fixture Lab released Model A with weights available today.",
+        "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "fetched_at": "2026-09-07T12:01:00Z"
+      }
+    },
+    {
+      "type": "story_cluster",
+      "record": {
+        "id": "cluster-fixture",
+        "article_ids": ["article-fixture"],
+        "representative_article_id": "article-fixture",
+        "rationale": "The fixture contains one distinct release.",
+        "created_at": "2026-09-07T12:02:00Z"
+      }
+    },
+    {
+      "type": "evidence",
+      "record": {
+        "id": "evidence-fixture",
+        "article_id": "article-fixture",
+        "kind": "article_text",
+        "source_url": "https://example.com/ai/model-a",
+        "locator": "paragraph-1",
+        "excerpt": "Fixture Lab released Model A with weights available today.",
+        "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "captured_at": "2026-09-07T12:03:00Z"
+      }
+    },
+    {
+      "type": "score",
+      "record": {
+        "id": "score-fixture",
+        "story_cluster_id": "cluster-fixture",
+        "relevance": 5,
+        "impact": 4,
+        "novelty": 4,
+        "evidence": 5,
+        "timeliness": 5,
+        "evidence_ids": ["evidence-fixture"],
+        "rationale": "A consequential, timely release with inspectable evidence."
+      }
+    },
+    {
+      "type": "summary",
+      "record": {
+        "id": "summary-fixture",
+        "story_cluster_id": "cluster-fixture",
+        "representative_article_id": "article-fixture",
+        "sentences": [
+          "Fixture Lab released Model A with weights available today.",
+          "The fixture records an illustrative release with inspectable source text.",
+          "Builders can use this record to verify the offline data path."
+        ],
+        "evidence_by_sentence": [
+          ["evidence-fixture"],
+          ["evidence-fixture"],
+          ["evidence-fixture"]
+        ],
+        "status": "verified"
+      }
+    },
+    {
+      "type": "verification_result",
+      "record": {
+        "id": "verification-fixture",
+        "summary_id": "summary-fixture",
+        "verdict": "pass",
+        "findings": [],
+        "checked_at": "2026-09-07T12:04:00Z",
+        "attempt": 1
+      }
+    },
+    {
+      "type": "run",
+      "record": {
+        "id": "run-fixture",
+        "status": "healthy",
+        "started_at": "2026-09-07T12:00:00Z",
+        "finished_at": "2026-09-07T12:05:00Z",
+        "coverage": {
+          "attempted": 1,
+          "successful": 1,
+          "unchanged": 0,
+          "failed": 0,
+          "unavailable": 0
+        },
+        "policy_version": "editorial-policy-2026-09-07",
+        "code_version": "fixture",
+        "termination_reason": "offline fixture completed"
+      }
+    }
+  ]
+}
