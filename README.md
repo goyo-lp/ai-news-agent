@@ -12,7 +12,7 @@ Agent implementation will land under `src/` via pull requests. See [CONTRIBUTING
 
 - Default branch: `main` (protected)
 - Workflow: GitHub Flow — short-lived `feat/*`, `fix/*`, `docs/*`, `chore/*` branches → PR to `main`
-- PRs require: 1 approval, green `ci`, resolved conversations
+- PRs require: green `ci`, resolved conversations (no required approvals — solo maintainer)
 - See [CONTRIBUTING.md](CONTRIBUTING.md) for branch naming, commits, and PR checklist.
 
 ## Contributing
