@@ -28,7 +28,8 @@ from ai_news_agent.observability import (
     run_trace_smoke,
     tracing_scope,
 )
-from ai_news_agent.schemas import Article
+from ai_news_agent.schemas import Article, StoryCluster
+from ai_news_agent.screening import build_judge, screen_clusters
 from ai_news_agent.sources import load_source_configs, load_sources_as_records
 from ai_news_agent.storage import SQLiteStore
 
@@ -275,6 +276,74 @@ def cluster(
         "tracing": "enabled" if settings.langsmith_tracing else "disabled",
     }
     logger.info("cluster_complete", **result)
+    typer.echo(json.dumps(result, sort_keys=True))
+    if not traces_ok:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def screen(
+    database: Annotated[
+        str | None,
+        typer.Option(help="SQLite path. Defaults to AI_NEWS_DATABASE_PATH."),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option(help="Maximum clusters to screen."),
+    ] = 100,
+    max_candidates: Annotated[
+        int,
+        typer.Option(help="Maximum stories to keep."),
+    ] = 50,
+    published: Annotated[
+        list[str] | None,
+        typer.Option(help="Already-published article ID. Repeat for more."),
+    ] = None,
+    timeout: Annotated[
+        float,
+        typer.Option(help="Per-judge-call timeout in seconds."),
+    ] = 30.0,
+) -> None:
+    """Shortlist stored story clusters with date rules and a relevance judge."""
+
+    settings = Settings()
+    configure_logging(
+        level=settings.ai_news_log_level,
+        output_format=settings.ai_news_log_format,
+    )
+    logger = structlog.get_logger(__name__)
+    database_path = database or str(settings.ai_news_database_path)
+    metadata = TraceMetadata(
+        digest_run_id="manual-screening",
+        component="screening",
+        environment=settings.ai_news_environment,
+    )
+
+    with tracing_scope(settings, metadata) as trace_client:
+        with SQLiteStore(database_path) as store:
+            store.migrate()
+            clusters = list(store.iter_records(StoryCluster))[:limit]
+            articles = {article.id: article for article in store.iter_records(Article)}
+            summary = screen_clusters(
+                tuple(clusters),
+                articles,
+                store,
+                judge=build_judge(settings, timeout=timeout),
+                max_candidates=max_candidates,
+                published_article_ids=frozenset(published or ()),
+            )
+        traces_ok = flush_traces(trace_client)
+
+    result = {
+        "attempted": summary.attempted,
+        "shortlisted": summary.shortlisted,
+        "borderline": summary.borderline,
+        "rejected": summary.rejected,
+        "merged": summary.merged,
+        "database": database_path,
+        "tracing": "enabled" if settings.langsmith_tracing else "disabled",
+    }
+    logger.info("screen_complete", **result)
     typer.echo(json.dumps(result, sort_keys=True))
     if not traces_ok:
         raise typer.Exit(code=1)

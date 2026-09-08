@@ -22,3 +22,22 @@ def test_tracing_is_disabled_by_default() -> None:
 
     assert settings.langsmith_tracing is False
     assert settings.tracing_ready is False
+
+
+def test_judge_uses_openrouter_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.judge_ready is False
+    assert settings.openrouter_model == "nvidia/nemotron-3-super-120b-a12b:free"
+    assert settings.openrouter_base_url == "https://openrouter.ai/api/v1"
+
+
+def test_judge_ready_with_key(monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-judge-key")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.judge_ready is True
+    assert "test-judge-key" not in repr(settings)

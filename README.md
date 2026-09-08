@@ -18,7 +18,8 @@ access, API keys, or tracing. See the [runtime guide](docs/runtime.md) for
 configuration, verification, and the opt-in LangSmith smoke test. Feed
 collection is documented in the [ingestion guide](docs/ingestion.md). Full-text
 retrieval is documented in the [extraction guide](docs/extraction.md). Event
-grouping is documented in the [clustering guide](docs/clustering.md). Agent behavior
+grouping is documented in the [clustering guide](docs/clustering.md). Candidate
+screening is documented in the [screening guide](docs/screening.md). Agent behavior
 will land under `src/` through the remaining planned pull requests.
 
 ## Editorial contract

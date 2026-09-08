@@ -28,8 +28,18 @@ class Settings(BaseSettings):
     langsmith_workspace_id: str | None = None
     langsmith_endpoint: str | None = None
 
+    openrouter_api_key: SecretStr | None = None
+    openrouter_model: str = "nvidia/nemotron-3-super-120b-a12b:free"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+
     @property
     def tracing_ready(self) -> bool:
         """Return whether live tracing has both opt-in and credentials."""
 
         return self.langsmith_tracing and self.langsmith_api_key is not None
+
+    @property
+    def judge_ready(self) -> bool:
+        """Return whether model-judged screening has credentials."""
+
+        return self.openrouter_api_key is not None
