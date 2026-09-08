@@ -117,3 +117,43 @@ def test_retrieve_command_fetches_stored_articles(tmp_path: Path, monkeypatch) -
             "SELECT payload_json FROM records WHERE record_type = 'article_text'"
         ).fetchone()
         assert row is not None
+
+
+def test_cluster_command_groups_stored_articles(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    from ai_news_agent.schemas import Article
+    from ai_news_agent.storage import SQLiteStore
+
+    now = datetime(2026, 9, 8, 12, 0, tzinfo=UTC)
+    database = tmp_path / "cluster.db"
+
+    def _article(article_id: str, title: str) -> Article:
+        url = f"https://example.com/ai/{article_id}"
+        return Article(
+            id=article_id,
+            source_id="source-01",
+            url=url,
+            canonical_url=url,
+            title=title,
+            published_at=now,
+            first_seen_at=now,
+        )
+
+    with SQLiteStore(database) as store:
+        store.migrate()
+        store.save(_article("a1", "Fixture Lab releases Model B with open weights"))
+        store.save(_article("a2", "Fixture Lab Releases Model B With Open Weights"))
+        store.save(_article("b1", "Rival Corp unveils Robot Chef for home kitchens"))
+
+    result = runner.invoke(app, ["cluster", "--database", str(database)])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["attempted"] == 3
+    assert payload["clusters"] == 2
+    with closing(sqlite3.connect(database)) as connection:
+        count = connection.execute(
+            "SELECT COUNT(*) FROM records WHERE record_type = 'story_cluster'"
+        ).fetchone()[0]
+        assert count == 2
