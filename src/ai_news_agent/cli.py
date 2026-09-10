@@ -29,11 +29,19 @@ from ai_news_agent.observability import (
     run_trace_smoke,
     tracing_scope,
 )
-from ai_news_agent.schemas import Article, Score, StoryCluster
+from ai_news_agent.schemas import Article, Score, StoryCluster, Summary
 from ai_news_agent.screening import build_judge, screen_clusters
 from ai_news_agent.selection import render_draft, select_digest
 from ai_news_agent.sources import load_source_configs, load_sources_as_records
 from ai_news_agent.storage import SQLiteStore
+from ai_news_agent.summaries import (
+    build_digest_items,
+    build_summary_writer,
+    generate_summaries,
+    render_archive_html,
+    render_email_html,
+    render_email_text,
+)
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 
@@ -520,6 +528,105 @@ def select(
         "tracing": "enabled" if settings.langsmith_tracing else "disabled",
     }
     logger.info("select_complete", **result)
+    typer.echo(json.dumps(result, sort_keys=True))
+    if not traces_ok:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def summarize(
+    database: Annotated[
+        str | None,
+        typer.Option(help="SQLite path. Defaults to AI_NEWS_DATABASE_PATH."),
+    ] = None,
+    cluster: Annotated[
+        list[str] | None,
+        typer.Option(help="Cluster ID to summarize. Repeat for more. Default: all."),
+    ] = None,
+    digest_run_id: Annotated[
+        str,
+        typer.Option(help="Shared digest run ID recorded on traces."),
+    ] = "manual-summaries",
+    timeout: Annotated[
+        float,
+        typer.Option(help="Per-writer-call timeout in seconds."),
+    ] = 30.0,
+    html_path: Annotated[
+        str | None,
+        typer.Option(help="Write an email-HTML preview to this path."),
+    ] = None,
+    text_path: Annotated[
+        str | None,
+        typer.Option(help="Write a plain-text preview to this path."),
+    ] = None,
+    archive_path: Annotated[
+        str | None,
+        typer.Option(help="Write an HTML archive preview to this path."),
+    ] = None,
+) -> None:
+    """Write grounded draft summaries and preview renderers locally."""
+
+    settings = Settings()
+    configure_logging(
+        level=settings.ai_news_log_level,
+        output_format=settings.ai_news_log_format,
+    )
+    logger = structlog.get_logger(__name__)
+    database_path = database or str(settings.ai_news_database_path)
+    metadata = TraceMetadata(
+        digest_run_id=digest_run_id,
+        component="summaries",
+        environment=settings.ai_news_environment,
+    )
+
+    with tracing_scope(settings, metadata) as trace_client:
+        with SQLiteStore(database_path) as store:
+            store.migrate()
+            stored = {item.id: item for item in store.iter_records(StoryCluster)}
+            requested = cluster or []
+            selected = tuple(
+                stored[cluster_id] for cluster_id in requested if cluster_id in stored
+            ) or tuple(stored.values())
+            articles = {article.id: article for article in store.iter_records(Article)}
+            result_summary = generate_summaries(
+                selected,
+                articles,
+                store,
+                writer=build_summary_writer(settings, timeout=timeout),
+                digest_run_id=digest_run_id,
+            )
+            summaries = {
+                item.story_cluster_id: item
+                for item in store.iter_records(Summary)
+                if item.story_cluster_id in {item.id for item in selected}
+            }
+            items = build_digest_items(
+                tuple(item.id for item in selected),
+                stored,
+                articles,
+                summaries,
+                store,
+            )
+            if html_path:
+                with open(html_path, "w", encoding="utf-8") as handle:
+                    handle.write(render_email_html(items))
+            if text_path:
+                with open(text_path, "w", encoding="utf-8") as handle:
+                    handle.write(render_email_text(items))
+            if archive_path:
+                with open(archive_path, "w", encoding="utf-8") as handle:
+                    handle.write(render_archive_html(items))
+        traces_ok = flush_traces(trace_client)
+
+    result = {
+        "digest_run_id": digest_run_id,
+        "attempted": result_summary.attempted,
+        "generated": result_summary.generated,
+        "insufficient": result_summary.insufficient,
+        "database": database_path,
+        "tracing": "enabled" if settings.langsmith_tracing else "disabled",
+    }
+    logger.info("summarize_complete", **result)
     typer.echo(json.dumps(result, sort_keys=True))
     if not traces_ok:
         raise typer.Exit(code=1)
