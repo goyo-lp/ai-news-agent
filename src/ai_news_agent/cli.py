@@ -42,6 +42,7 @@ from ai_news_agent.summaries import (
     render_email_html,
     render_email_text,
 )
+from ai_news_agent.verification import build_verifier, run_verification
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 
@@ -627,6 +628,92 @@ def summarize(
         "tracing": "enabled" if settings.langsmith_tracing else "disabled",
     }
     logger.info("summarize_complete", **result)
+    typer.echo(json.dumps(result, sort_keys=True))
+    if not traces_ok:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def verify(
+    database: Annotated[
+        str | None,
+        typer.Option(help="SQLite path. Defaults to AI_NEWS_DATABASE_PATH."),
+    ] = None,
+    cluster: Annotated[
+        list[str] | None,
+        typer.Option(help="Selected cluster ID. Repeat for more. Default: all."),
+    ] = None,
+    reserve: Annotated[
+        list[str] | None,
+        typer.Option(help="Reserve cluster ID for replacement. Repeatable."),
+    ] = None,
+    digest_run_id: Annotated[
+        str,
+        typer.Option(help="Shared digest run ID recorded on traces."),
+    ] = "manual-verification",
+    max_attempts: Annotated[
+        int,
+        typer.Option(help="Maximum verify/repair attempts per story."),
+    ] = 2,
+    timeout: Annotated[
+        float,
+        typer.Option(help="Per-verifier-call timeout in seconds."),
+    ] = 30.0,
+) -> None:
+    """Verify draft summaries with bounded repair and reserve replacement."""
+
+    settings = Settings()
+    configure_logging(
+        level=settings.ai_news_log_level,
+        output_format=settings.ai_news_log_format,
+    )
+    logger = structlog.get_logger(__name__)
+    database_path = database or str(settings.ai_news_database_path)
+    metadata = TraceMetadata(
+        digest_run_id=digest_run_id,
+        component="verification",
+        environment=settings.ai_news_environment,
+    )
+
+    with tracing_scope(settings, metadata) as trace_client:
+        with SQLiteStore(database_path) as store:
+            store.migrate()
+            stored = {item.id: item for item in store.iter_records(StoryCluster)}
+            requested = cluster or []
+            selected = tuple(
+                stored[cluster_id] for cluster_id in requested if cluster_id in stored
+            ) or tuple(stored.values())
+            articles = {article.id: article for article in store.iter_records(Article)}
+            scores = {
+                score.story_cluster_id: score for score in store.iter_records(Score)
+            }
+            summary = run_verification(
+                tuple(item.id for item in selected),
+                stored,
+                articles,
+                store,
+                verifier=build_verifier(settings, timeout=timeout),
+                writer=build_summary_writer(settings, timeout=timeout),
+                scores_by_cluster=scores,
+                reserve_ids=tuple(reserve or ()),
+                max_attempts=max_attempts,
+                digest_run_id=digest_run_id,
+            )
+        traces_ok = flush_traces(trace_client)
+
+    result = {
+        "digest_run_id": digest_run_id,
+        "attempted": summary.attempted,
+        "verified": summary.verified,
+        "rejected": summary.rejected,
+        "replaced": summary.replaced,
+        "shortfall": summary.shortfall,
+        "verified_ids": list(summary.verified_ids),
+        "meets_minimum": summary.meets_minimum,
+        "database": database_path,
+        "tracing": "enabled" if settings.langsmith_tracing else "disabled",
+    }
+    logger.info("verify_complete", **result)
     typer.echo(json.dumps(result, sort_keys=True))
     if not traces_ok:
         raise typer.Exit(code=1)

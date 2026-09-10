@@ -171,7 +171,7 @@ def test_screen_command_shortlists_with_injected_judge(
     from ai_news_agent.screening import RelevanceVerdict
     from ai_news_agent.storage import SQLiteStore
 
-    now = datetime(2026, 9, 8, 12, 0, tzinfo=UTC)
+    now = datetime.now(UTC)
     database = tmp_path / "screen.db"
 
     def _article(article_id: str, title: str) -> Article:
